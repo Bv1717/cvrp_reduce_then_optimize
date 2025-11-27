@@ -1,0 +1,5 @@
+- ++instance_dir=data/samples/benchmarking
+- ++solution_dir=benchmarking
+- method=ts
+- method.L=5
+- num_threads=1

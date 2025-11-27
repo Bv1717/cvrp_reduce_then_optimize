@@ -1,0 +1,19 @@
+method:
+  name: ts
+  L: 5
+  tabu_in_range:
+    lb: 7
+    ub: 10
+  tabu_out_range:
+    lb: 2
+    ub: 4
+  beta: 0.5
+  gamma: 0.5
+  grb_timeout: 60
+verbose: false
+summarize: false
+num_threads: 1
+seed: 0
+log_dir: logs
+instance_dir: data/samples
+solution_dir: benchmarking

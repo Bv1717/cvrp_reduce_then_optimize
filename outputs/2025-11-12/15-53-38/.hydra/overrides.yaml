@@ -1,0 +1,7 @@
+- ++instance_dir=data/samples
+- ++solution_dir=benchmarking
+- method=ml-reduction
+- ++method.model_path=trained_models/model_gcnn_features_graph_raw_prediction_task_binary_classification_normalization_standard_hidden_layer_dim_20_num_conv_layers_10_num_dense_layers_2/cross_val/best_checkpoint.pth.tar
+- num_threads=1
+- decoder=exact
+- ++method.model_name=test1

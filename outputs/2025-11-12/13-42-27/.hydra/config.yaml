@@ -1,0 +1,20 @@
+method:
+  size_threshold:
+  - 0.33333
+  - 0.266667
+  - 0.2
+  prob_threshold:
+  - 0.5
+  - 0.4
+  - 0.3
+  model_path: trained
+  model_name: null
+  name: ml-reduction
+  threshold_type: size
+verbose: false
+summarize: false
+num_threads: 1
+seed: 0
+log_dir: logs
+instance_dir: data/samples
+solution_dir: benchmarking

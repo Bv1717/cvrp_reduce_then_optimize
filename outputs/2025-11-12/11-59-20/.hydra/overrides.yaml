@@ -1,0 +1,4 @@
+- ++instance_dir=data/samples
+- ++solution_dir=benchmarking
+- method=ml-reduction
+- num_threads=1

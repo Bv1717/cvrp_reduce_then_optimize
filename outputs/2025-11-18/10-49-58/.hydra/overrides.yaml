@@ -1,0 +1,9 @@
+- ++instance_dir=data/samples_Munich_100
+- ++solution_dir=benchmarking_Munich
+- method=ml-reduction
+- ++method.model_path=trained_models_Munich_100/model_gcnn_features_graph_raw_prediction_task_binary_classification_normalization_standard_hidden_layer_dim_20_num_conv_layers_6_num_dense_layers_2/cross_val/best_checkpoint.pth.tar
+- num_threads=1
+- decoder=exact
+- ++method.model_name=test1
+- summarize=True
+- ++result_dir=benchmarking_Munich_100

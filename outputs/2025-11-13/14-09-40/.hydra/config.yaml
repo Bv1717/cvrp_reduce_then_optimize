@@ -1,0 +1,23 @@
+method:
+  size_threshold:
+  - 0.33333
+  - 0.266667
+  - 0.2
+  prob_threshold:
+  - 0.5
+  - 0.4
+  - 0.3
+  model_path: trained_models/model_gcnn_features_graph_raw_prediction_task_binary_classification_normalization_standard_hidden_layer_dim_20_num_conv_layers_10_num_dense_layers_2/cross_val/best_checkpoint.pth.tar
+  model_name: test1
+  name: ml-reduction
+  threshold_type: size
+decoder:
+  name: exact
+  grb_timeout: 60
+verbose: false
+summarize: false
+num_threads: 1
+seed: 0
+log_dir: logs
+instance_dir: data/samples_Munich
+solution_dir: benchmarking

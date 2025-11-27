@@ -1,0 +1,15 @@
+*.pyc
+*.xlsx
+*.zip
+*.jpg
+*.png
+*.pdf
+*.pkl
+*.log
+.venv/
+.CondaPkg
+gurobi.lic
+
+__pycache__/
+/.vscode
+resources/

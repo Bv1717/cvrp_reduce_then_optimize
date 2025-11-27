@@ -1,0 +1,4 @@
+,#arcs predicted,#arcs used,average runtime,average solver runtime,runtime limit hit,percentage optimally solved,mip gap,average obj value,mean,median,min,max,std
+ml-reduction\size\exact-grb_timeout_60\test1\0.2,84.0,84.84,7.02,1.001,0,1.0,0.0,148839.64676616914,9.09,8.76,0.0,25.0,5.51
+ml-reduction\size\exact-grb_timeout_60\test1\0.266667,112.0,112.08,7.021,1.001,0,9.45,0.0,140561.08955223882,3.06,2.25,0.0,15.36,3.08
+ml-reduction\size\exact-grb_timeout_60\test1\0.33333,140.0,140.0,7.021,1.001,0,35.82,0.0,137782.50746268657,1.01,0.43,0.0,10.56,1.58

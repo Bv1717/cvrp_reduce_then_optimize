@@ -1,0 +1,4 @@
+.idea
+resources/cache
+resources/instances/*
+resources/preprocessed/*

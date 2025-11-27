@@ -1,0 +1,10 @@
+method:
+  grb_timeout: 60
+  name: exact
+verbose: false
+summarize: false
+num_threads: 1
+seed: 0
+log_dir: logs
+instance_dir: data/samples
+solution_dir: benchmarking

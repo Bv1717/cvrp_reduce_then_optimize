@@ -1,0 +1,6 @@
+- ++instance_dir=data/samples
+- ++solution_dir=benchmarking
+- ++method.grb_timeout=60
+- method=ts
+- method.L=5
+- num_threads=1

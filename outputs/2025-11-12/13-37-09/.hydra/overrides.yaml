@@ -1,0 +1,5 @@
+- ++instance_dir=data/samples
+- ++solution_dir=benchmarking
+- method=ml-reduction
+- ++model_path=trained
+- num_threads=1

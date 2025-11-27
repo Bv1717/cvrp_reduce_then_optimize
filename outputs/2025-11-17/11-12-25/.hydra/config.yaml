@@ -1,0 +1,29 @@
+model:
+  model: gcnn
+  features: graph_raw
+  prediction_task: binary_classification
+  normalization: standard
+  hidden_layer_dim: 20
+  num_conv_layers: 6
+  num_dense_layers: 2
+data_path: data/samples_Munich
+num_samples: null
+var_size_samples: false
+train_batch_size: 32
+val_batch_size: 128
+max_num_epochs: 500
+learning_rate: 0.001
+momentum: 0.9
+weight_decay: 0
+lr_decay: true
+patience: 5
+lr_decay_factor: 0.1
+early_stopping: 15
+opt_threshold: 1.0e-05
+monitoring_kpi: validation_loss
+out_dir: trained_models
+log_dir: logs
+use_gpu: false
+seed: 0
+cross_validate: true
+test_split: 0.2
