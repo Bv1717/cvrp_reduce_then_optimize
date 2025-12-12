@@ -3,6 +3,7 @@
 import torch
 
 
+
 # def loss_edges_multiclass(y_pred_edges, y_edges, edge_cw=None):
 #     """Loss function for multi-class edge predictions.
 
@@ -51,3 +52,12 @@ def loss_arcs_multiclass(y_pred_arcs, y_arcs, arc_cw=None):
     y = y.permute(0, 3, 1, 2).contiguous()  # B x VOC x V1 x V2
     loss_arcs = torch.nn.NLLLoss(arc_cw)(y, y_arcs)
     return loss_arcs
+
+
+def FY_loss_regularised(FW_env, predicted_costs, demands, arc_index, nb_vehicles, vehicle_capacity,
+                         true_solution, regul_lambda = 0.5, max_iterations = 20 ):
+
+    y_hat= FW_env.run(demands, arc_index, nb_vehicles, vehicle_capacity,
+                                           predicted_costs, true_solution, regul_lambda, max_iterations)  
+
+    return y_hat 

@@ -9,6 +9,7 @@ import random
 import gurobipy as gp
 import networkx as nx
 import numpy as np
+from VRPSolverEasy.src import solver
 
 # from core.utils.preprocessing import get_weight_matrix
 
@@ -811,3 +812,78 @@ def cvrp_subset_connections(demands, arc_index, arc_costs, nb_vehicles,
             )
 
     return m, x, u
+
+
+def cvrp_via_VRP_Easy(demands, arc_index, arc_costs, nb_vehicles,
+                            vehicle_capacity, connections):
+    
+
+    cost_dict = {(int(src), int(dst)): arc_costs[k]
+             for k, (src, dst) in enumerate(zip(arc_index[0], arc_index[1]))
+             if connections[k]}
+
+    arc_list = [
+        (int(i), int(j))
+        for idx, (i, j) in enumerate(zip(arc_index[0], arc_index[1]))
+        if connections[idx]
+    ]
+    
+    model = solver.Model()
+
+    # add vehicle type
+    model.add_vehicle_type(id=1,
+                           start_point_id=0,
+                           end_point_id=0,
+                           max_number=nb_vehicles,
+                           capacity=vehicle_capacity,
+                           var_cost_dist=1
+                           )
+    # add depot
+    model.add_depot(id=0)
+
+    for i in range(1, len(demands)):
+        model.add_customer(id=i,
+                           demand=int(demands[i])
+                           )
+        
+    for arc in arc_list:
+        model.add_link(start_point_id=arc[0],
+                       end_point_id=arc[1],
+                       distance=float(cost_dict[arc])
+                       )
+        
+    model.set_parameters(time_limit=10)
+
+    ''' If you have cplex 22.1 installed on your laptop windows you have to specify
+        solver path'''
+    
+    # solver_path = r"C:\Users\bapti\IBM_CPLEX\cplex\bin\x64_win64\cplex2211.dll"
+
+    
+    # model.parameters.cplex_path = solver_path
+    
+    model.solve()
+
+    if model.solution.is_defined :
+        print(f"""Statistics :
+        best lower bound : { model.statistics.best_lb } 
+        
+        solution time : {model.statistics.solution_time}
+        
+        number of nodes : {model.statistics.nb_branch_and_bound_nodes}
+        
+        solution value : {model.solution.value}
+
+        root lower bound : {model.statistics.root_lb}
+
+        root root time : {model.statistics.root_time}.
+        """)
+        print(f"Status : {model.status}.\n")
+        print(f"Message : {model.message}.\n")   
+        for route in model.solution.routes:            
+            print(f"Vehicle Type id : {route.vehicle_type_id}.")
+            print(f"Ids : {route.point_ids}.")
+            print(f"Load : {route.cap_consumption}.\n")
+
+    
+    

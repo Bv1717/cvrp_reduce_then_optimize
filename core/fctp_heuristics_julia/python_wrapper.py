@@ -174,18 +174,13 @@ class Frank_Wolfe_regularisation_env:
     def compile_run(self):
         """Perform compilation run"""
 
-        from juliacall import convert as jlconvert, Main as jl
-
         demands = np.array([0, 2, 3, 1])
         nb_vehicles = 1
         capacity_vehicles = 6
-        arcs_list = [(i + 1, j+1) for i in range(len(demands)) for j in range(len(demands)) if i != j]
-
-        # y_values = {(1,2) : 1.0, (2,3) : 1.0, (3,4) : 1.0, (4,1) : 1.0}
-
-        # f_values = {(1,2) : 0.0, (2,3) : 2.0, (3,4) : 5.0, (4,1) : 6.0}
+        arcs_list = [(i+1, j+1) for i in range(len(demands)) for j in range(len(demands)) if i != j]
 
         arc_costs = {(i, j) : np.random.rand() for (i,j) in arcs_list}
+        true_test_solution = {(i, j) : 0 for (i,j) in arcs_list}
         
         coef_lambda = 0.5
 
@@ -193,28 +188,29 @@ class Frank_Wolfe_regularisation_env:
 
         print("Running compilation run...")
 
-        y_arc_sol, f_arc_sol, sol_val = self.FW(
+        y_arc_sol = self.FW(
             demands,
             arcs_list,
             arc_costs,
             nb_vehicles,
             capacity_vehicles,
+            true_test_solution,
             coef_lambda,
             max_iteration
         )
         print(y_arc_sol)
-        print(f_arc_sol)
-        print(sol_val)
         
-    def run(self, instance, arc_costs, coef_lambda, max_iteration):
+    def run(self, demands, arc_index, nb_vehicles, vehicle_capacity,
+             arc_costs, true_solution, coef_lambda, max_iteration):
 
-        arcs_list = [(int(src) + 1, int(dst) + 1) for src, dst in zip(instance.arc_index[0], instance.arc_index[1])]
+        arcs_list = [(int(src) + 1, int(dst) + 1) for src, dst in zip(arc_index[0], arc_index[1])]
         cost_dict = {(int(src) + 1, int(dst) + 1): arc_costs[k]
-             for k, (src, dst) in enumerate(zip(instance.arc_index[0], instance.arc_index[1]))}
-
-        y_sol, f_sol, sol_val = self.FW(instance.demands, arcs_list, cost_dict,
-                instance.nb_vehicles, instance.vehicle_capacity,
+             for k, (src, dst) in enumerate(zip(arc_index[0], arc_index[1]))}
+        true_solution_dict = {(int(src) + 1, int(dst) + 1): true_solution[k]
+             for k, (src, dst) in enumerate(zip(arc_index[0], arc_index[1]))}
+        
+        y_sol = self.FW(demands, arcs_list, cost_dict,
+                nb_vehicles, vehicle_capacity, true_solution_dict,
                 coef_lambda, max_iteration)
         
-        print(sol_val)
-        return y_sol, f_sol, sol_val
+        return y_sol

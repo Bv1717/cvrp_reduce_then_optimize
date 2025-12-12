@@ -28,6 +28,8 @@ from sklearn.metrics import ConfusionMatrixDisplay
 
 from core.fctp_heuristics_julia.python_wrapper import Frank_Wolfe_regularisation_env
 
+from core.cvrp_solvers.ip_grb import cvrp_via_VRP_Easy
+
 # --- Generator function ---
 def generate_cvrp_instance(num_nodes=20, vehicle_capacity=30, nb_vehicles=5):
     # Create nodes (node 0 = depot, others = clients)
@@ -400,57 +402,66 @@ def generate_benchmark_plot(solution_dir):
     plt.show()
 # --- Main: generate a few samples ---
 if __name__ == "__main__":
-    np.random.seed(3) #first 42, now 4, now 3
-    os.makedirs("data/samples_Munich_100_test_cluster", exist_ok=True)
-    for k in range(1000):  
-        # rd_num_nodes = np.random.randint(30, 50)
-        # print("rd_num_nodes = ", rd_num_nodes)
-        # inst = generate_cvrp_instance(rd_num_nodes, 30, rd_num_nodes)
-        Munich_inst = generate_restricted_cvrp_instances_Munich(
-        "interlog_gen-master/resources/instances/100_0_1/all_w_geom.csv",
-        "interlog_gen-master/resources/instances/100_0_1/dm_drive.csv", nb_clients= 20)
-        # save_sample(Munich_inst, f"data/samples_Munich/sample_20_0_1_Munich{k}.pkl.gz")
-        # test_Clark_heuristic(inst)
-        solve_HGS_VRP_test_cluster(Munich_inst, f"data/samples_Munich_100_test_cluster/sample_100_0_1_Munich{k}.pkl.gz")
-    # chkpnt = torch.load("trained_models_Munich_100/model_gcnn_features_graph_raw_prediction_task_binary_classification_normalization_standard_hidden_layer_dim_20_num_conv_layers_2_num_dense_layers_2/cross_val/best_checkpoint.pth.tar", map_location="cpu")    
+    # np.random.seed(3) #first 42, now 4, now 3
+    # os.makedirs("data/samples_Munich_100_test_cluster", exist_ok=True)
+    # for k in range(1):  
+    #     # rd_num_nodes = np.random.randint(30, 50)
+    #     # print("rd_num_nodes = ", rd_num_nodes)
+    #     # inst = generate_cvrp_instance(rd_num_nodes, 30, rd_num_nodes)
+    #     Munich_inst = generate_restricted_cvrp_instances_Munich(
+    #     "interlog_gen-master/resources/instances/100_0_1/all_w_geom.csv",
+    #     "interlog_gen-master/resources/instances/100_0_1/dm_drive.csv", nb_clients= 20)
+    #     # save_sample(Munich_inst, f"data/samples_Munich/sample_20_0_1_Munich{k}.pkl.gz")
+    #     # test_Clark_heuristic(inst)
+    #     # solve_HGS_VRP_test_cluster(Munich_inst, f"data/samples_Munich_100_test_cluster/sample_100_0_1_Munich{k}.pkl.gz")
+    #     connections = [True]*len(Munich_inst.arc_costs)
+    #     arc_cost_neg = [-np.random.randint(30, 50) for i in range(len(Munich_inst.arc_costs))]
+    #     cvrp_via_VRP_Easy(Munich_inst.demands,
+    #                Munich_inst.arc_index,
+    #                Munich_inst.arc_costs,
+    #                Munich_inst.nb_vehicles,
+    #                Munich_inst.vehicle_capacity, connections)
+    chkpnt = torch.load("trained_models_FY_loss_Munich_100/model_gcnn_features_graph_raw_prediction_task_binary_classification_normalization_standard_hidden_layer_dim_20_num_conv_layers_4_num_dense_layers_2/cross_val//fold_4/checkpoint.pth.tar", map_location="cpu")    
 
-    # perf = chkpnt["exp_dict"]["performance"]
+    perf = chkpnt["exp_dict"]["performance"]
 
-    # ConfusionMatrixDisplay(confusion_matrix=perf["confusion_matrix"][-1]).plot(cmap="Blues")
-    # plt.title("Final Confusion Matrix")
-    # plt.show()
+    ConfusionMatrixDisplay(confusion_matrix=perf["confusion_matrix"][-1]).plot(cmap="Blues")
+    plt.title("Final Confusion Matrix")
+    plt.show()
 
-    # fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
-    # # --- Loss ---
-    # axes[0].plot(perf["train_loss"], label="Training Loss")
-    # axes[0].plot(perf["validation_loss"], label="Validation Loss")
-    # axes[0].set_title("Loss")
-    # axes[0].set_xlabel("Epoch")
-    # axes[0].set_ylabel("Loss")
-    # axes[0].legend()
-    # axes[0].grid(True)
+    # --- Loss ---
+    axes[0].plot(perf["train_loss"], label="Training Loss")
+    axes[0].plot(perf["validation_loss"], label="Validation Loss")
+    axes[0].set_title("Loss")
+    axes[0].set_xlabel("Epoch")
+    axes[0].set_ylabel("Loss")
+    axes[0].legend()
+    axes[0].grid(True)
 
-    # # --- Accuracy ---
-    # axes[1].plot(perf["validation_accuracy"], label="Validation Accuracy", color="green")
-    # axes[1].set_title("Accuracy")
-    # axes[1].set_xlabel("Epoch")
-    # axes[1].set_ylabel("Accuracy")
-    # axes[1].legend()
-    # axes[1].grid(True)
+    # --- Accuracy ---
+    axes[1].plot(perf["validation_accuracy"], label="Validation Accuracy", color="green")
+    axes[1].set_title("Accuracy")
+    axes[1].set_xlabel("Epoch")
+    axes[1].set_ylabel("Accuracy")
+    axes[1].legend()
+    axes[1].grid(True)
 
-    # # --- Recall / Precision / F-score ---
-    # axes[2].plot(perf["validation_recall"], label="Recall", color="orange")
-    # axes[2].plot(perf["validation_precision"], label="Precision", color="blue")
-    # axes[2].plot(perf["validation_fscore"], label="F-score", color="red")
-    # axes[2].set_title("Validation Metrics")
-    # axes[2].set_xlabel("Epoch")
-    # axes[2].set_ylabel("Score")
-    # axes[2].legend()
-    # axes[2].grid(True)
+    # --- Recall / Precision / F-score ---
+    axes[2].plot(perf["validation_recall"], label="Recall", color="orange")
+    axes[2].plot(perf["validation_precision"], label="Precision", color="blue")
+    axes[2].plot(perf["validation_fscore"], label="F-score", color="red")
+    axes[2].set_title("Validation Metrics")
+    axes[2].set_xlabel("Epoch")
+    axes[2].set_ylabel("Score")
+    axes[2].legend()
+    axes[2].grid(True)
 
-    # plt.tight_layout()
-    # plt.show()
+    plt.tight_layout()
+    plt.show()
+
+
     # # files = os.listdir("trained_models_Munich_100/model_gcnn_features_graph_raw_prediction_task_binary_classification_normalization_standard_hidden_layer_dim_20_num_conv_layers_6_num_dense_layers_2")
     # # print("Files in directory:", files)
 
@@ -458,26 +469,90 @@ if __name__ == "__main__":
 
     # print("Samples generated in data/samples/")
 
-    # from juliacall import Main as jl
+    # import os
+    # import ctypes
 
-    # # Load your Julia file
+    # # Add CPLEX DLL directory explicitly
+    # os.add_dll_directory(r"C:\Users\bapti\IBM_CPLEX\cplex\bin\x64_win64")
 
-    # jl.seval("""
-    #     import Pkg
-    #     Pkg.activate("C:/Users/bapti/Documents/Neuer Ordner/Reduce-then-Optimize-for-FCTP/.venv/julia_env")
-    #     """)
-    # jl.include("core/fctp_heuristics_julia/Frank_Wolfe_regularisation.jl")
-
-    # FW_env = Frank_Wolfe_regularisation_env()
-    # print("Environment created successfully.")
-
-    # # Call Julia function
+    # # Now load your DLL
+    # lib = ctypes.CDLL(r"C:\Users\bapti\Documents\Neuer Ordner\Reduce-then-Optimize-for-FCTP\bapcod-shared.dll")
 
 
-    # # FW_env = Frank_Wolfe_regularisation_env()
 
-    # Munich_inst = generate_restricted_cvrp_instances_Munich(
-    #     "interlog_gen-master/resources/instances/100_0_1/all_w_geom.csv",
-    #     "interlog_gen-master/resources/instances/100_0_1/dm_drive.csv", nb_clients= 20)
+    # import VRPSolverEasy as vrpse
+    # import math
 
-    # FW_env.run(Munich_inst, Munich_inst.arc_costs, 0.5, 20)
+    # def compute_euclidean_distance(x_i, x_j, y_i, y_j):
+    #     """compute the euclidean distance between 2 points from graph"""
+    #     return round(math.sqrt((x_i - x_j)**2 +
+    #                         (y_i - y_j)**2), 3)
+
+    # # Data
+    # cost_per_distance = 10
+    # begin_time = 0
+    # end_time = 5000
+    # nb_point = 7
+
+    # # Map with names and coordinates
+    # coordinates = {"Wisconsin, USA": (44.50, -89.50),  # depot
+    #             "West Virginia, USA": (39.000000, -80.500000),
+    #             "Vermont, USA": (44.000000, -72.699997),
+    #             "Texas, the USA": (31.000000, -100.000000),
+    #             "South Dakota, the US": (44.500000, -100.000000),
+    #             "Rhode Island, the US": (41.742325, -71.742332),
+    #             "Oregon, the US": (44.000000, -120.500000)
+    #             }
+
+    # # Demands of points
+    # demands = [0, 500, 300, 600, 658, 741, 436]
+
+    # # Initialisation
+    # model = vrpse.Model()
+
+    # # Add vehicle type
+    # model.add_vehicle_type(
+    #     id=1,
+    #     start_point_id=0,
+    #     end_point_id=0,
+    #     name="VEH1",
+    #     capacity=1100,
+    #     max_number=6,
+    #     var_cost_dist=cost_per_distance,
+    #     tw_end=5000)
+
+    # # Add depot
+    # model.add_depot(id=0, name="D1", tw_begin=0, tw_end=5000)
+
+    # coordinates_keys = list(coordinates.keys())
+    # # Add customers
+    # for i in range(1, nb_point):
+    #     model.add_customer(
+    #         id=i,
+    #         name=coordinates_keys[i],
+    #         demand=demands[i],
+    #         tw_begin=begin_time,
+    #         tw_end=end_time)
+
+    # # Add links
+    # coordinates_values = list(coordinates.values())
+    # for i in range(0, 7):
+    #     for j in range(i + 1, 7):
+    #         dist = compute_euclidean_distance(coordinates_values[i][0],
+    #                                         coordinates_values[j][0],
+    #                                         coordinates_values[i][1],
+    #                                         coordinates_values[j][1])
+    #         model.add_link(
+    #             start_point_id=i,
+    #             end_point_id=j,
+    #             distance=dist,
+    #             time=dist)
+
+    # # solve model
+    # model.solve()
+    # model.export()
+
+    # if model.solution.is_defined():
+    #     print(model.solution)
+
+

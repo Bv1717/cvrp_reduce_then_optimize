@@ -19,6 +19,9 @@ monitoring_kpi: "validation_loss"
 # out_dir: "models/sol_edge_predictor"
 ##Changes
 out_dir: "models/sol_arc_predictor"
+top_k : 200
+regul_lambda : 0.1
+max_iterations_FW : 15
 ##End changes
 log_dir: "logs"
 use_gpu: False

@@ -375,7 +375,7 @@ def main(training_config: DictConfig) -> None:
 
     input_transformer = None
     if model_config.normalization == "standard":
-        normalizers = tuple([StandardNormalizer() for _ in range(2)])
+        normalizers = tuple([StandardNormalizer() for _ in range(2)]) ##careful
         input_transformer = MultiInputNormalizer(normalizers)
 
     #######################################################

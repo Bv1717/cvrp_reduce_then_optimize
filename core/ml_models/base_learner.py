@@ -43,18 +43,18 @@ class BaseLearner:
         if self.lr_decay:
             self.scheduler.step(metric)
 
-    def train_step(self, batch):
+    def train_step(self, batch, FW_env, top_k, regul_lambda, max_iterations):
         """Wrapper function for performing a training step."""
 
         self.model.train()
 
         self.optimizer.zero_grad()
-        loss, predictions = self.forward_pass(batch)
+        loss, predictions, true_loss = self.forward_pass(batch, FW_env, top_k, regul_lambda, max_iterations)
 
         loss.backward()
         self.optimizer.step()
 
-        return loss, predictions
+        return loss, predictions, true_loss
 
     def forward_pass(self, inputs, labels, *args, **kwargs):
         return None, None

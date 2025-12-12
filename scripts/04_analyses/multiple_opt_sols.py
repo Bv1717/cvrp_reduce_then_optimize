@@ -15,8 +15,8 @@ from core.ml_models.wrapper import (
 from core.fctp_solvers.ip_grb import fctp
 from core.fctp_solvers.ip_grb import capacitated_fctp
 from core.fctp_solvers.ip_grb import fixed_step_fctp
-from core.utils.fctp import FixedStepFCTP
-from core.utils.fctp import CapacitatedFCTP
+from core.utils.cvrp import FixedStepFCTP
+from core.utils.cvrp import CapacitatedFCTP
 
 
 if __name__ == "__main__":

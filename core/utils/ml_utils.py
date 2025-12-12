@@ -37,6 +37,7 @@ from core.utils.kpi import evaluate_solution_costs_dict
 
 ##Changes 
 from core.utils.postprocessing import sol_to_list
+from core.fctp_heuristics_julia.python_wrapper import Frank_Wolfe_regularisation_env
 ##End changes
 
 from core.utils.utils import default_to_regular_dict
@@ -1492,6 +1493,7 @@ class CVRPData(Dataset):
         y = torch.tensor(self.y[index], dtype=torch.float)
         nb_vehicles = torch.tensor(self.nb_vehicles[index], dtype=torch.float)
         vehicle_capacity = torch.tensor(self.vehicle_capacity[index], dtype = torch.float)
+        demands_list = torch.tensor(self.x_nodes[index], dtype=torch.int )
 
         # Build PyG Data object
         data = Data(
@@ -1499,8 +1501,9 @@ class CVRPData(Dataset):
             edge_index=arc_index,     # connectivity
             edge_attr=x_connections,  # edge features
             y=y,                       # label
-            num_vehicles=nb_vehicles,
-            vehicle_capacity=vehicle_capacity
+            nb_vehicles=nb_vehicles,
+            vehicle_capacity=vehicle_capacity,
+            demands = demands_list
         )
         return data
 
@@ -1638,8 +1641,20 @@ def training_wrapper(
     exp_dict["initial_performance"] = defaultdict(lambda: [])
     exp_dict["performance"] = defaultdict(lambda: [])
 
+    top_k = training_config.top_k
+    regul_lambda = training_config.regul_lambda
+    max_iterations_FW = training_config.max_iterations_FW
+
+    # top_k = 140
+    # regul_lambda = 0.1
+    # max_iterations = 15
+
+
     # Evaluate policy before first update
-    p = policy.evaluate({"train": train_loader, "validation": val_loader})
+    FW_env = Frank_Wolfe_regularisation_env()
+    print("Environment created successfully.")
+    p = policy.evaluate({"train": train_loader, "validation": val_loader}, FW_env,
+                                top_k, regul_lambda, max_iterations_FW)
     for key, value in p.items():
         exp_dict["initial_performance"][key].append(value)
     logger.info(("[Initial performance] " f"{initial_eval_display_func(p)}"))
@@ -1649,6 +1664,7 @@ def training_wrapper(
     best_kpi_val = np.inf
     total_start_time = time.time()
     logger.info("Starting training loop...")
+
     for i in range(training_config.max_num_epochs):
 
         policy.model.train()
@@ -1659,8 +1675,10 @@ def training_wrapper(
         running_loss = 0
         for batch in train_loader:
             # Update model parameters
-            loss, _ = policy.train_step(batch)
-            running_loss += loss.cpu().item()
+            loss, _, true_loss = policy.train_step(batch, FW_env, top_k,
+                                                    regul_lambda, max_iterations_FW)
+            # running_loss += loss.cpu().item()
+            running_loss += true_loss
         running_loss = running_loss / len(train_loader)
 
         train_time = time.time() - start_time
@@ -1671,9 +1689,11 @@ def training_wrapper(
 
         # Evaluate model performance
         if eval_train_data:
-            p = policy.evaluate({"train": train_loader, "validation": val_loader})
+            p = policy.evaluate({"train": train_loader, "validation": val_loader}, FW_env,
+                                top_k, regul_lambda, max_iterations_FW)
         else:
-            p = policy.evaluate({"validation": val_loader})
+            p = policy.evaluate({"validation": val_loader}, FW_env,
+                                top_k, regul_lambda, max_iterations_FW)
         for key, value in p.items():
             exp_dict["performance"][key].append(value)
 
@@ -1681,7 +1701,8 @@ def training_wrapper(
         policy.model.eval()
         with torch.no_grad():
             for batch in val_loader:
-                _, outputs = policy.forward_pass(batch)
+                _, outputs,_ = policy.forward_pass(batch, FW_env,
+                                top_k, regul_lambda, max_iterations_FW)
                 preds = (outputs > 0.5).int().cpu().numpy()  # binary case
                 y_true.extend(batch.y.cpu().numpy())
                 y_pred.extend(preds)

@@ -70,6 +70,7 @@ docker run --rm -v $PWD:/code -w /code -e PYTHONPATH=/code fctp-reduce-then-opti
 # Example 2: Solve full problem with TS
 docker run --rm -v $PWD:/code -w /code -e PYTHONPATH=/code fctp-reduce-then-optimize:latest python scripts/03_benchmarking/01_run_benchmarking_experiments.py ++instance_dir="data/instances/benchmarking" ++solution_dir="benchmarking" method="ts" method.L=5 num_threads=1
 
+
 # Example 3: Reduce-then-Optimize with GNN+GRB (assuming a GNN model checkpoint at trained_models/best_checkpoint.pth.tar)
 docker run --rm -v $PWD:/code -w /code -e PYTHONPATH=/code fctp-reduce-then-optimize:latest python scripts/03_benchmarking/01_run_benchmarking_experiments.py ++instance_dir="data/instances/benchmarking" ++solution_dir="benchmarking" method="ml-reduction" method.model_path="trained_models/best_checkpoint.pth.tar" method.model_name="my_gnn" method.threshold_type="size" method.size_threshold=[0.2,0.3,0.4] decoder="exact" num_threads=1
 ```
