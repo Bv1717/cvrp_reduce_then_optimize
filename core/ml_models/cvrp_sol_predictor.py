@@ -13,6 +13,8 @@ from core.ml_models.baselines import MLP
 
 ##Changes
 from core.ml_models.gnn import GraphNNAtt
+import torch.nn.functional as F
+from torch_geometric.utils import group_argsort
 ##End changes
 
 
@@ -24,8 +26,10 @@ from core.ml_models.losses import loss_arcs_multiclass
 from core.utils.kpi import eval_arc_prediction_accuracy
 from core.ml_models.losses import FY_loss_regularised
 from core.cvrp_solvers.ip_grb import cvrp_subset_connections
+from core.cvrp_solvers.ip_grb import solve_relaxed_flow_cvrp
 import gurobipy as gp
 from core.cvrp_solvers.ip_grb import sol_vals
+from core.cvrp_solvers.heuristics import heu_solve_HGS_VRP
 ##End changes
 
 from core.utils.kpi import get_accuracy
@@ -360,7 +364,7 @@ class BaseSolArcPredictor(BaseLearner):
             if self.class_weight is not None:
                 self.class_weight = torch.FloatTensor([self.class_weight])
             self.loss_fn = torch.nn.BCEWithLogitsLoss(pos_weight=self.class_weight)
-            self.loss_FY = FY_loss_regularised
+            # self.loss_FY = FY_loss_regularised
             self.evaluate = self.evaluate_binary
         # Multi-class classification: (weighted) Cross Entropy loss
         else:
@@ -371,7 +375,8 @@ class BaseSolArcPredictor(BaseLearner):
 
         self.input_transformer = input_transformer
 
-    def forward_pass(self, data, FW_env, k, regul_lambda , max_iterations):
+    def forward_pass(self, data, FW_env, k, regul_lambda , max_iterations,
+                      Monte_Carlo_nb_iterations = 10, sd_perturbation = 0.001):
 
         arc_predictions_raw, arc_predictions = self.predict_arcs(data)
 
@@ -386,165 +391,146 @@ class BaseSolArcPredictor(BaseLearner):
 
         true_total_loss = 0
 
-        y_hat_predictions = []
+        # y_hat_predictions = []
+        # for i, instance in enumerate(instances):
+        #     arcs_list = [(int(src) , int(dst)) for src, dst in zip(instance.edge_index[0], instance.edge_index[1])]
+
+        #     true_arc_solution = true_arc_list[edge_pos_instance : instance.num_edges + edge_pos_instance].squeeze().tolist()
+        #     true_arc_solution_tensor = true_arc_list[edge_pos_instance : instance.num_edges + edge_pos_instance].squeeze()
+        #     predicted_costs_list = arc_predictions[edge_pos_instance : instance.num_edges + edge_pos_instance].squeeze().tolist()
+        #     predicted_costs_tensor = arc_predictions[
+        #         edge_pos_instance : edge_pos_instance + instance.num_edges
+        #     ].squeeze()  
+        #     edge_pos_instance += instance.num_edges 
+
+        #     demands_list = instance.demands.squeeze().tolist()
+        #     relevant_connections = [True]*len(arcs_list)
 
 
-        for i, instance in enumerate(instances):
-            arcs_list = [(int(src) , int(dst)) for src, dst in zip(instance.edge_index[0], instance.edge_index[1])]
-
-            true_arc_solution = true_arc_list[edge_pos_instance : instance.num_edges + edge_pos_instance].squeeze().tolist()
-            true_arc_solution_tensor = true_arc_list[edge_pos_instance : instance.num_edges + edge_pos_instance].squeeze()
-            predicted_costs_list = arc_predictions_raw[edge_pos_instance : instance.num_edges + edge_pos_instance].squeeze().tolist()
-            predicted_costs_tensor = arc_predictions_raw[
-                edge_pos_instance : edge_pos_instance + instance.num_edges
-            ].squeeze()  
-            edge_pos_instance += instance.num_edges 
-
-            demands_list = instance.demands.squeeze().tolist()
-
-            # relevant_connections = [True]*len(arcs_list)
-
-            # solution = {}
-
-            # model, x, _ = cvrp_subset_connections(
-            #     instance.demands.squeeze().tolist(),
-            #     instance.edge_index,
-            #     predicted_costs_list,
-            #     int(instance.nb_vehicles.item()),
-            #     int(instance.vehicle_capacity.item()),
-            #     relevant_connections,
-            #     relax=False,
-            # )
-            # model.setParam("OutputFlag", 0)
-            # model.setParam("TimeLimit", 0.2)
-            # model.optimize()
-            # if model.status == gp.GRB.OPTIMAL or model.status == gp.GRB.SUBOPTIMAL  or model.SolCount>0:
-            #     # print("Number of solutions found:", model.SolCount)
-            #     solution = sol_vals(x)
-            #     # print("Optimal objective value with restriction:", model.objVal)
-            # else:
-            #     # print("Number of solutions found:", model.SolCount)
-            #     # print("No feasible solution found, status:", model.status)
-            #     solution = {}
-
-
-            # test_value = regul_lambda/2 * torch.sum(true_arc_solution_tensor**2) - torch.dot(predicted_costs_tensor, true_arc_solution_tensor)
-            # print("true_value :", test_value.item())
-            # # solution, _ = heu_solve_HGS_VRP(instance.demands.squeeze().tolist(), instance.edge_index, 
-            # #           predicted_costs_list, int(instance.nb_vehicles.item()),
-            # #             int(instance.vehicle_capacity.item()), relevant_connections)
-            
-            # sol_list = []
-            # for src, tgt in zip(instance.edge_index[0], instance.edge_index[1]):
-            #     val = solution.get((src, tgt), 0.0)  # default 0 if missing
-            #     sol_list.append(val)
-
-            # gradient_cost_list = [0]*len(predicted_costs_list)
-            # for t in range(max_iterations):
-
-            #     print("test_value : ",
-            #     regul_lambda/2 * sum(y_val**2 for y_val in sol_list)
-            #     - np.dot(predicted_costs_list, sol_list))
-
-            #     for i in range(len(gradient_cost_list)):
-            #         gradient_cost_list[i] = regul_lambda*sol_list[i] - predicted_costs_list[i]
-
-            #     model, x, _ = cvrp_subset_connections(
-            #         instance.demands.squeeze().tolist(),
-            #         instance.edge_index,
-            #         gradient_cost_list,
-            #     int(instance.nb_vehicles.item()),
-            #     int(instance.vehicle_capacity.item()),
-            #         relevant_connections,
-            #         relax=False,
-            #     )
-            #     model.setParam("OutputFlag", 0)
-            #     model.setParam("TimeLimit",1)
-            #     model.optimize()
-            #     print("Number of solutions found:", model.SolCount)
-            #     if model.status == gp.GRB.OPTIMAL or model.status == gp.GRB.SUBOPTIMAL or model.SolCount>0:
-            #         solution = sol_vals(x)
-            #         # print("Optimal objective value with restriction:", model.objVal)
-            #     else:
-            #         # print("No feasible solution found, status:", model.status)
-            #         solution = {}
- 
-            #     tempora_sol_list = []
-
-            #     for src, tgt in arcs_list:
-            #         val = solution.get((src, tgt), 2)  # default 0 if missing
-            #         tempora_sol_list.append(val)  
-
-            #     for i in range(len(gradient_cost_list)):
-            #         sol_list[i] = sol_list[i] + 2/(t+3)*(tempora_sol_list[i] - sol_list[i])
-
-
-
-
-            # print("final_value : ",
-            #         regul_lambda/2 * sum(y_val**2 for y_val in sol_list)
-            #         - np.dot(predicted_costs_list, sol_list))
-
-
-            y_hat = self.loss_FY(FW_env, predicted_costs_list,
-                                    demands_list, instance.edge_index, int(instance.nb_vehicles.item()),
-                                    int(instance.vehicle_capacity.item()), true_arc_solution,
-                                    regul_lambda=regul_lambda, max_iterations= max_iterations)
+        # #     y_hat = self.loss_FY(FW_env, predicted_costs_list,
+        # #                             demands_list, instance.edge_index, int(instance.nb_vehicles.item()),
+        # #                             int(instance.vehicle_capacity.item()), true_arc_solution,
+        # #                             regul_lambda=regul_lambda, max_iterations= max_iterations)
             
         
-            y_hat_dict = dict(y_hat)
+        # #     y_hat_dict = dict(y_hat)
 
-            # print("y_hat_dict : ",y_hat_dict)
+        # #     # print("y_hat_dict : ",y_hat_dict)
 
-            y_hat_list = [y_hat_dict.get(tuple(arc), 0.0) for arc in arcs_list]
+        # #     y_hat_list = [y_hat_dict.get(tuple(arc), 0.0) for arc in arcs_list]
 
-            # y_hat_list = sol_list
-
-
-            y_hat_tensor = torch.tensor(y_hat_list, dtype=torch.float32, device=predicted_costs_tensor.device)
-            # print("y_hat_tensor :", y_hat_tensor)
-            print("y_hat_tensor", y_hat.shape())
-
-            y_pre_prediction = (y_hat_tensor / (y_hat_tensor.sum() + 1e-8)).unsqueeze(1)
-            # y_hat_predictions.append((y_hat_tensor / (y_hat_tensor.sum() + 1e-8)).unsqueeze(1))
-
-            topk_indices = torch.topk(y_pre_prediction.squeeze(), k).indices
-            predictions = torch.zeros_like(y_pre_prediction, dtype=torch.int)
-            predictions[topk_indices] = 1
-            y_hat_predictions.append(predictions)
-
-            # Squared norm
-            y_hat_squared_norm = torch.norm(y_hat_tensor).pow(2).item()
-
-            y_true_squared_norm = torch.sum(true_arc_solution_tensor.squeeze()**2).detach().cpu().numpy()
-
-            correct_objective = torch.sum(predicted_costs_tensor * true_arc_solution_tensor)
-            predicted_objective = torch.sum(predicted_costs_tensor * y_hat_tensor)
+        # #     # y_hat_list = sol_list
 
 
+        # #     y_hat_tensor = torch.tensor(y_hat_list, dtype=torch.float32, device=predicted_costs_tensor.device)
+        # #     # print("y_hat_tensor :", y_hat_tensor)
+        # #     print("y_hat_tensor", y_hat.shape())
 
-            # Special loss: difference between predicted and correct objectives
-            loss_instance = predicted_objective - correct_objective
+        # #     y_pre_prediction = (y_hat_tensor / (y_hat_tensor.sum() + 1e-8)).unsqueeze(1)
+        # #     # y_hat_predictions.append((y_hat_tensor / (y_hat_tensor.sum() + 1e-8)).unsqueeze(1))
 
-            # print("obj_value_FW : ", obj_value)
-            # print("FW_obj_value : ", -predicted_objective.detach().cpu().numpy() + 2.5*y_hat_squared_norm)
+        # #     topk_indices = torch.topk(y_pre_prediction.squeeze(), k).indices
+        # #     predictions = torch.zeros_like(y_pre_prediction, dtype=torch.int)
+        # #     predictions[topk_indices] = 1
+        # #     y_hat_predictions.append(predictions)
 
-            true_loss_instance = loss_instance.detach().cpu().numpy() - (regul_lambda/2)*(y_hat_squared_norm-y_true_squared_norm)
-            total_loss += loss_instance
+        # #     # Squared norm
+        # #     y_hat_squared_norm = torch.norm(y_hat_tensor).pow(2).item()
 
-            true_total_loss += true_loss_instance
-            # print("true_loss_instance : ", true_loss_instance)
+        # #     y_true_squared_norm = torch.sum(true_arc_solution_tensor.squeeze()**2).detach().cpu().numpy()
 
-        total_loss = total_loss/len(instances)
-        true_total_loss = true_total_loss/len(instances)
+        # #     correct_objective = torch.sum(predicted_costs_tensor * true_arc_solution_tensor)
+        # #     predicted_objective = torch.sum(predicted_costs_tensor * y_hat_tensor)
+
+
+
+        #     # Special loss: difference between predicted and correct objectives
+        #     loss_instance = predicted_objective - correct_objective
+
+        #     # print("obj_value_FW : ", obj_value)
+        #     # print("FW_obj_value : ", -predicted_objective.detach().cpu().numpy() + 2.5*y_hat_squared_norm)
+
+        #     true_loss_instance = loss_instance.detach().cpu().numpy() - (regul_lambda/2)*(y_hat_squared_norm-y_true_squared_norm)
+        #     total_loss += loss_instance
+
+        #     true_total_loss += true_loss_instance
+        #     # print("true_loss_instance : ", true_loss_instance)
+
+        #     y_hat_list_Monte_Carlo = []
+        #     for i in range(Monte_Carlo_nb_iterations):
+        #         # perturbed_costs = predicted_costs_list + np.random.normal(loc=0,
+        #         #          scale=sd_perturbation, size=len(predicted_costs_list))
+                
+        #         Z = np.random.normal(loc=0, scale=1, size=len(predicted_costs_list)) 
+        #         noise = np.exp(sd_perturbation * Z - 0.5 * sd_perturbation**2) 
+        #         perturbed_costs = predicted_costs_list * noise
+        #         # solution = solve_relaxed_flow_cvrp(
+        #         #     instance.demands.squeeze().tolist(),
+        #         #     instance.edge_index,
+        #         #     -perturbed_costs,
+        #         #     int(instance.nb_vehicles.item()),
+        #         #     int(instance.vehicle_capacity.item()),
+        #         #     relevant_connections
+        #         # )
+        #         solution, _ = heu_solve_HGS_VRP(instance.demands.squeeze().tolist(),
+        #                     instance.edge_index, 
+        #               -perturbed_costs*1000, int(instance.nb_vehicles.item()),
+        #                 int(instance.vehicle_capacity.item()), relevant_connections)
+        #         y_hat_list_Monte_Carlo.append(solution)
+
+        #     solution_keys = y_hat_list_Monte_Carlo[0].keys()
+
+        #     y_mean_dict = {}
+
+        #     for k in solution_keys:
+        #         y_mean_dict[k] = np.mean([d[k] for d in y_hat_list_Monte_Carlo])
+
+        #     y_hat_list = [y_mean_dict.get(tuple(arc), 0.0) for arc in arcs_list]
+        #     y_hat_tensor = torch.tensor(y_hat_list, dtype=torch.float32, device=predicted_costs_tensor.device)
+
+        #     correct_objective = torch.sum(predicted_costs_tensor * true_arc_solution_tensor)
+        #     predicted_objective = torch.sum(predicted_costs_tensor * y_hat_tensor)
+
+        #     loss_instance = predicted_objective - correct_objective
+
+      
+
+        # #     true_loss_instance = loss_instance.detach().cpu().numpy() - (regul_lambda/2)*(y_hat_squared_norm-y_true_squared_norm)
+        #     total_loss += loss_instance
+
+        # #     true_total_loss += true_loss_instanc
+
+            
+
+        # total_loss = total_loss/len(instances)
+        # true_total_loss = true_total_loss/len(instances)
         
-        # loss = self.loss_fn(arc_predictions_raw, true_arc_list)
+        loss = self.loss_fn(arc_predictions_raw, true_arc_list)
 
-        y_hat_predictions_tensor = torch.cat(y_hat_predictions, dim=0)
+        # y_hat_predictions_tensor = torch.cat(y_hat_predictions, dim=0)
 
         # print(y_hat_predictions_tensor)
 
-        return total_loss, arc_predictions, true_total_loss
+        # arc_predictions_raw: logits from your model, shape [num_edges]
+        # true_arc_list: ground truth labels, shape [num_edges]
+        # batch.x_weights: per-edge weights, shape [num_edges]
+
+        logits = arc_predictions_raw.view(-1)
+        targets = true_arc_list.float().view(-1)
+        weights = data.x_weights.view(-1)
+
+        # Compute weighted BCE
+        loss_unreduced = F.binary_cross_entropy_with_logits(
+            logits,
+            targets,
+            reduction='none'
+        )  
+
+
+        # Apply weights and normalize
+        # loss = (weights * loss_unreduced).sum() / weights.sum()
+
+        return loss, arc_predictions, true_total_loss
 
     def predict_arcs(self, data, train=True):
         """Make arc prediction.
@@ -583,6 +569,9 @@ class BaseSolArcPredictor(BaseLearner):
             predictions = torch.nn.functional.log_softmax(predictions_raw, dim=-1)
         else:
             predictions = torch.sigmoid(predictions_raw)
+            # predictions = -torch.exp(predictions_raw)
+
+
 
         return predictions_raw, predictions
 
@@ -612,15 +601,29 @@ class BaseSolArcPredictor(BaseLearner):
                 loss = loss.item()
 
                 threshold = 0.5
-                # predictions = (outputs > threshold).int().detach().cpu().numpy()
+                predictions = (outputs > threshold).int().detach().cpu().numpy()
+
+                # predictions = torch.zeros_like(outputs, dtype=torch.int)
+
+                # for node in range(batch.num_nodes): 
+                #     mask = batch.edge_index[0] == node
+                #     node_outputs = outputs[mask].squeeze()
+                #     top_k_indices = torch.topk(node_outputs, top_k).indices
+                #     global_indices = mask.nonzero(as_tuple=True)[0][top_k_indices]
+                #     # print("global_indices : ", global_indices)
+                #     predictions[global_indices] = 1
+
+                # predictions = predictions.cpu().numpy()
+
+                # print("predictions : ", predictions)
 
                 # k = 50*32 # or based on vehicle capacity
                 # topk_indices = torch.topk(outputs.squeeze(), k).indices
                 # predictions = torch.zeros_like(outputs, dtype=torch.int).detach().cpu().numpy()
                 # predictions[topk_indices] = 1
 
-                outputs_norm = (outputs - outputs.min()) / (outputs.max() - outputs.min() + 1e-8)
-                predictions = (outputs_norm > 0.4).int().detach().cpu().numpy()
+                # outputs_norm = (outputs - outputs.min()) / (outputs.max() - outputs.min() + 1e-8)
+                # predictions = (outputs_norm > 0.4).int().detach().cpu().numpy()
 
                 # predictions = outputs.detach().cpu().numpy()
 
@@ -629,7 +632,7 @@ class BaseSolArcPredictor(BaseLearner):
                 )
                 # collect KPIs
                 # running_loss += loss
-                running_loss +=true_total_loss
+                running_loss +=loss
                 running_acc += accuracy
                 running_rec += recall
                 running_prec += precision

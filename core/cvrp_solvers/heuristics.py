@@ -400,7 +400,7 @@ def Clark_Wright_heuristic(demands, arc_index, arc_costs, nb_vehicles, vehicle_c
     return sol_dict
 
 def heu_solve_HGS_VRP(demands, arc_index, arc_costs, nb_vehicles, 
-                      vehicle_capacity, relevant_connections, heu_time = 5):
+                      vehicle_capacity, relevant_connections, heu_time = 2):
 
 
     for i in range(len(demands)):
@@ -409,7 +409,7 @@ def heu_solve_HGS_VRP(demands, arc_index, arc_costs, nb_vehicles,
             break
 
     arc_list = [(int(src), int(dst)) for src, dst in zip(arc_index[0], arc_index[1])]
-    
+
     m = HGS_Model()
     m.add_vehicle_type(capacity=vehicle_capacity, num_available=nb_vehicles)
     total_nodes_dict = {}
@@ -418,11 +418,14 @@ def heu_solve_HGS_VRP(demands, arc_index, arc_costs, nb_vehicles,
     for i in range(len(demands)): 
         if demands[i] != 0:
             total_nodes_dict[i] = m.add_client(x=0, y=0, delivery=int(demands[i]))
+
     for i , arc in enumerate(arc_list):
         if(relevant_connections[i]):
+
             m.add_edge(total_nodes_dict[arc[0]], total_nodes_dict[arc[1]],
                         distance=arc_costs[i])
-    res = m.solve(stop=HGS_MaxRuntime(heu_time), display= False) 
+    res = m.solve(stop=HGS_MaxRuntime(heu_time), display= True) 
+    print(res)
     sol_dict = {(int(src), int(dst)): 0
              for (src, dst) in (zip(arc_index[0], arc_index[1]))}
     for i in range(len(res.best.routes())):
@@ -431,7 +434,7 @@ def heu_solve_HGS_VRP(demands, arc_index, arc_costs, nb_vehicles,
         if len(res.best.routes()[i].visits()) >= 2:
             for j in range(1, len(res.best.routes()[i].visits())):
                 sol_dict[(res.best.routes()[i].visits()[j-1], res.best.routes()[i].visits()[j])] = 1
-    print("objective value with HGS : ", res.cost())
+    # print("objective value with HGS : ", res.cost())
     return sol_dict, res.cost()
 
 

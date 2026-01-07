@@ -1,0 +1,9 @@
+- ++instance_dir=data/samples_Munich_100
+- ++solution_dir=benchmarking_500
+- method=ml-reduction
+- ++method.model_path=trained_models_FY_loss_Munich_100_rl5_ns500_mi50\model_gcnn_features_graph_raw_prediction_task_binary_classification_normalization_standard_hidden_layer_dim_20_num_conv_layers_4_num_dense_layers_2\cross_val\fold_0\checkpoint.pth.tar
+- num_threads=1
+- decoder=exact
+- ++method.model_name=test500
+- summarize=True
+- ++result_dir=benchmarking_500

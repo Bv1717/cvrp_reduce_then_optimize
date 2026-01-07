@@ -76,7 +76,7 @@ def load_sample(sample_path):
     """
     with gzip.open(sample_path, "rb") as file:
         sample = pkl.load(file)
-    sample["instance"] = dict_to_instance(sample)
+    sample["instance"], _ = dict_to_instance(sample)
     return sample
 
 
@@ -115,7 +115,7 @@ def dict_to_instance(instance_dict):
             vehicle_capacity=instance_dict["instance"]["vehicle_capacity"],
             arc_costs=arc_costs,
             nb_vehicles=instance_dict["instance"]["nb_vehicles"],
-        )
+        ), instance_dict["solution"]
     else:
         raise ValueError
 

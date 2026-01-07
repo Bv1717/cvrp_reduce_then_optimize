@@ -350,7 +350,20 @@ def main(training_config: DictConfig) -> None:
         with open_dict(model_config):
             model_config.node_dim = x_nodes[0].shape[-1]
             model_config.arc_dim = x_connections[0].shape[-1]
-        x = (x_nodes, x_connections, arc_index, nb_vehicles, vehicle_capacity)
+
+        print("Type:", type(x_connections))
+        print("Length:", len(x_connections))
+        # for i, elem in enumerate(x_connections): 
+        #     print(f"Element {i}: type={type(elem)}, shape={getattr(elem, 'shape', None)}, value={elem}")
+        # total_sum = np.sum(x_connections)
+
+        # # Avoid division by zero
+        # if total_sum == 0:
+        #     x_weights = np.zeros_like(x_connections)
+        # else:
+        #     x_weights = training_config.alpha * (x_connections / total_sum)
+        x_weights = np.zeros(1)
+        x = (x_nodes, x_connections, arc_index, nb_vehicles, vehicle_capacity, x_weights)
     else:
         raise ValueError
 
@@ -459,6 +472,7 @@ def main(training_config: DictConfig) -> None:
         arc_index_train = [arc_index[i] for i in train_idx]
         nb_vehicles_train = [nb_vehicles[i] for i in train_idx]
         vehicle_capacity_train = [vehicle_capacity[i] for i in train_idx]
+        x_weights_train = [x_weights[i]*y[i] +(1-y[i])+training_config.beta for i in train_idx]
         y_train = [y[i] for i in train_idx]
 
         x_nodes_val = [x_nodes[i] for i in val_idx]
@@ -466,12 +480,13 @@ def main(training_config: DictConfig) -> None:
         arc_index_val = [arc_index[i] for i in val_idx]
         nb_vehicles_val = [nb_vehicles[i] for i in val_idx]
         vehicle_capacity_val = [vehicle_capacity[i] for i in val_idx]
+        x_weights_val = [x_weights[i]*y[i] +(1-y[i])+training_config.beta for i in val_idx]
         y_val = [y[i] for i in val_idx]
 
         train_dataset = CVRPData((x_nodes_train, x_connections_train, arc_index_train,
-                                   nb_vehicles_train, vehicle_capacity_train), y_train)
+                                   nb_vehicles_train, vehicle_capacity_train, x_weights_train), y_train)
         val_dataset   = CVRPData((x_nodes_val, x_connections_val, arc_index_val,
-                                  nb_vehicles_val, vehicle_capacity_val),   y_val)
+                                  nb_vehicles_val, vehicle_capacity_val, x_weights_val),   y_val)
 
         if input_transformer is not None:
             input_transformer.fit([
@@ -513,6 +528,8 @@ def main(training_config: DictConfig) -> None:
             arc_index_train = [arc_index[i] for i in train_idx]
             nb_vehicles_train = [nb_vehicles[i] for i in train_idx]
             vehicle_capacity_train = [vehicle_capacity[i] for i in train_idx]
+            # x_weights_train = [x_weights[i]*y[i] +(1-y[i])*training_config.beta for i in train_idx]
+            x_weights_train = [0]
             y_train = [y[i] for i in train_idx]
 
             x_nodes_val = [x_nodes[i] for i in val_idx]
@@ -520,12 +537,14 @@ def main(training_config: DictConfig) -> None:
             arc_index_val = [arc_index[i] for i in val_idx]
             nb_vehicles_val = [nb_vehicles[i] for i in val_idx]
             vehicle_capacity_val = [vehicle_capacity[i] for i in val_idx]
+            # x_weights_val = [x_weights[i]*y[i] +(1-y[i])*training_config.beta for i in val_idx]
+            x_weights_val = [0]
             y_val = [y[i] for i in val_idx]
 
             train_dataset = CVRPData((x_nodes_train, x_connections_train, arc_index_train,
-                                      nb_vehicles_train, vehicle_capacity_train), y_train)
+                                      nb_vehicles_train, vehicle_capacity_train, x_weights_train), y_train)
             val_dataset   = CVRPData((x_nodes_val,   x_connections_val,   arc_index_val,
-                                      nb_vehicles_val, vehicle_capacity_val),   y_val)
+                                      nb_vehicles_val, vehicle_capacity_val, x_weights_val),   y_val)
 
             if input_transformer is not None:
                 # Remove the leading batch dimension so each arr is [num_nodes, node_dim]

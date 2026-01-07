@@ -8,6 +8,8 @@ import torch
 import matplotlib.pyplot as plt
 from pyvrp import Model as HGS_Model
 from pyvrp.stop import MaxRuntime as HGS_MaxRuntime
+import re
+import math
 # from typing import List
 
 from core.utils.cvrp import CVRP_node
@@ -400,8 +402,116 @@ def generate_benchmark_plot(solution_dir):
     axes[-1].set_xlabel("Instance index")
     plt.tight_layout()
     plt.show()
+
+
+def parse_cvrp_literatur_instances(path_instance):
+    nb_vehicles = 2*int(re.search(r'k(\d+)', path_instance).group(1))
+    with open(path_instance, "r") as f :
+        lines = f.readlines()
+
+    coords = {}
+    demands = {}
+    vehicle_capacity = None
+    mode = None
+
+    for line in lines : 
+        line = line.strip()
+
+        if line.startswith("CAPACITY"):
+            vehicle_capacity = int(line.split(":")[1])
+
+        if line.startswith("NODE_COORD_SECTION"):
+            mode="coords"
+            continue
+        if line.startswith("DEMAND_SECTION"):
+            mode="demands"
+            continue
+        if line.startswith("DEPOT_SECTION"): 
+            mode = "depot"
+            continue
+        if line.startswith("EOF"):
+            break
+
+        if mode=="coords" and line:
+            parts = line.split()
+            idx = int(parts[0])-1
+            x = float(parts[1])
+            y = float(parts[2])
+            coords[idx] = (x, y)
+
+        if mode=="demands" and line:
+            parts = line.split()
+            idx = int(parts[0])-1
+            demands[idx] = int(parts[1])
+
+
+        
+
+    nodes = []
+
+    for idx in sorted(coords.keys()):
+        x, y = coords[idx]
+        d = demands[idx]
+        nodes.append(CVRP_node(idx, d, x, y))
+
+    arc_index_list = [[],[]]
+    arc_cost_list = []
+
+    node_ids = sorted(coords.keys())
+
+    for i in node_ids:
+        x1, y1 = coords[i]
+        for j in node_ids:
+            if i != j:
+                x2, y2 = coords[j]
+
+                dist = round(math.sqrt((x1-x2)**2 + (y1-y2)**2))
+                arc_index_list[0].append(i)
+                arc_index_list[1].append(j)
+                arc_cost_list.append(dist)
+
+    arc_index = np.array(arc_index_list)
+    arc_costs = np.array(arc_cost_list)
+    return CVRP(nodes, arc_index, vehicle_capacity, arc_costs, nb_vehicles)
+
+def parse_solution_file(path, depot=0):
+    arcs = {}   # dictionary of arcs (u, v) → 1
+
+    with open(path, "r") as f:
+        lines = f.readlines()
+
+    for line in lines:
+        line = line.strip()
+
+        # Stop at cost line
+        if line.startswith("Cost"):
+            break
+
+        # Parse route lines
+        if line.startswith("Route"):
+            # Example: "Route #1: 31 46 35"
+            parts = line.split(":")[1].strip().split()
+            route = [int(x) for x in parts]
+
+            # Add depot → first
+            arcs[(depot, route[0])] = 1
+
+            # Add internal arcs
+            for u, v in zip(route[:-1], route[1:]):
+                arcs[(u, v)] = 1
+
+            # Add last → depot
+            arcs[(route[-1], depot)] = 1
+
+    return arcs
+
+
+
+
 # --- Main: generate a few samples ---
 if __name__ == "__main__":
+
+
     # np.random.seed(3) #first 42, now 4, now 3
     # os.makedirs("data/samples_Munich_100_test_cluster", exist_ok=True)
     # for k in range(1):  
@@ -421,7 +531,7 @@ if __name__ == "__main__":
     #                Munich_inst.arc_costs,
     #                Munich_inst.nb_vehicles,
     #                Munich_inst.vehicle_capacity, connections)
-    chkpnt = torch.load("trained_models_FY_loss_Munich_100/model_gcnn_features_graph_raw_prediction_task_binary_classification_normalization_standard_hidden_layer_dim_20_num_conv_layers_4_num_dense_layers_2/cross_val//fold_4/checkpoint.pth.tar", map_location="cpu")    
+    chkpnt = torch.load("trained_models_X_instances_mix_Munich_1000_100/model_gcnn_features_graph_raw_prediction_task_binary_classification_normalization_standard_hidden_layer_dim_20_num_conv_layers_6_num_dense_layers_2/cross_val/fold_0/checkpoint.pth.tar", map_location="cpu")    
 
     perf = chkpnt["exp_dict"]["performance"]
 
@@ -554,5 +664,71 @@ if __name__ == "__main__":
 
     # if model.solution.is_defined():
     #     print(model.solution)
+
+    # folder_path = "CVRPLIB-main\X\Instances"
+    # solution_folder_path = "CVRPLIB-main\X\Solutions"
+    # os.makedirs("data/X_instances", exist_ok=True)
+    # cvrp_instances = []
+
+    # for filename in os.listdir(folder_path):
+    #     instance_path = os.path.join(folder_path, filename)
+    #     solution_filename = filename.replace(".vrp", ".sol")
+
+
+    #     solution_path = os.path.join(solution_folder_path, solution_filename)
+
+    #     cvrp_instance = parse_cvrp_literatur_instances(instance_path)
+    #     solution_cvrp_instance = parse_solution_file(solution_path)
+
+
+    #     arc_indicator = {} # All arcs in the instance
+    #     sources = cvrp_instance.arc_index[0]
+    #     targets = cvrp_instance.arc_index[1]
+
+    #     for u, v in zip(sources, targets):
+    #         if (u, v) in solution_cvrp_instance:
+    #             arc_indicator[(u, v)] = 1 
+    #         else:
+    #             arc_indicator[(u, v)] = 0
+
+    #     sample = {
+    #         "instance": cvrp_instance.to_dict(),
+    #         "solution": arc_indicator,
+    #         "runtime": 0,
+    #         "opt_gap": None,
+    #         "opt_status": "best_opt",
+    #     }
+    #     save_filename = filename.replace(".vrp", "")
+    #     with gzip.open(f"data/X_instances/" +save_filename +".pkl.gz", "wb") as f:
+    #         pkl.dump(sample, f)
+
+
+
+        # print(f"Number of nodes: {len(cvrp_instance.nodes)}")
+        # print(f"Vehicle capacity: {cvrp_instance.vehicle_capacity}")
+        # print(f"Number of vehicles: {cvrp_instance.nb_vehicles}")
+
+        # Depot is the node with demand 0
+        # depot_nodes = [n.node_id for n in cvrp_instance.nodes if n.demand == 0]
+        # print(f"Depot node(s): {depot_nodes}")
+
+        # Print first few nodes to check parsing
+        # print("\nFirst 5 nodes:")
+        # for n in cvrp_instance.nodes[:5]:
+        #     print(f"  Node {n.node_id}: demand={n.demand}, x={n.x}, y={n.y}")
+
+        # # Arc info
+        # print(f"\nNumber of arcs: {cvrp_instance.arc_index.shape[1]}")
+        # print("First 5 arcs:")
+        # for i in range(5):
+        #     src = cvrp_instance.arc_index[0][i]
+        #     tgt = cvrp_instance.arc_index[1][i]
+        #     cost = cvrp_instance.arc_costs[i]
+        #     print(f"  {src} -> {tgt} : cost={cost}")
+
+        # print("==============================\n")
+
+
+
 
 

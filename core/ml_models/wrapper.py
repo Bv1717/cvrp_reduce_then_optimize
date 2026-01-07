@@ -422,7 +422,7 @@ def get_max_likelihood_sol(instance, relevant_connections, prediction):
     all_connections = [True]*len(handmade_costs)
     sol, _ = heu_solve_HGS_VRP(instance.demands, instance.arc_index, handmade_costs, 
                             instance.nb_vehicles, instance.vehicle_capacity, all_connections,
-                            heu_time=2)
+                            heu_time=100)
     # sol = Clark_Wright_heuristic(instance.demands, instance.arc_index,
     #                             handmade_costs, instance.nb_vehicles,
     #                             instance.vehicle_capacity)
@@ -473,6 +473,7 @@ def sol_arc_predictor_wrapper(instance, predictor_model):
 def get_reduced_problem(
     instance,
     predictor_model,
+    test_list=None,
     threshold_type="size",
     threshold=0.5,
 ):
@@ -505,11 +506,14 @@ def get_reduced_problem(
     # get arc values/likelihoods
     arc_likelihood, arc_index = sol_arc_predictor_wrapper(instance, predictor_model)
 
+
     # select the most likely arcs
     if threshold_type == "size":
         threshold = np.quantile(arc_likelihood, 1 - threshold)
     relevant_connections = arc_likelihood >= threshold
     relevant_connections = relevant_connections.reshape(-1) 
+
+    
 
     num_arcs_pred = np.sum(relevant_connections)
 
@@ -538,6 +542,7 @@ def solve_reduced_problem(
     decoder_cfg=None,
     decoder_env=None,
     seed=0,
+    HGS_run_time=100
 ):
     """Wrapper function to solve reduced problem.
 
@@ -606,18 +611,20 @@ def solve_reduced_problem(
 
         solution, _ = heu_solve_HGS_VRP(instance.demands, instance.arc_index, 
                       instance.arc_costs, instance.nb_vehicles,
-                        instance.vehicle_capacity, relevant_connections)
+                        instance.vehicle_capacity, relevant_connections, heu_time=HGS_run_time)
     return solution, 1, status, 0  #solution, runtime, status, mip_gap
 
 def ml_based_cvrp_reduction(
     instance,
     predictor_model,
+    test_list=None,
     threshold_type="size",
     threshold=0.5,
     decoder="exact",
     decoder_cfg=None,
     decoder_env=None,
     seed=0,
+    HGS_run_time=100
 ):
     """Wrapper function for ML-based reduce-then-optimize.
 
@@ -663,6 +670,7 @@ def ml_based_cvrp_reduction(
     relevant_connections, arc_index, (num_arcs_pred, num_arcs_enriched) = get_reduced_problem(
         instance,
         predictor_model,
+        test_list,
         threshold_type,
         threshold,
     )
@@ -675,6 +683,7 @@ def ml_based_cvrp_reduction(
         decoder_cfg,
         decoder_env,
         seed,
+        HGS_run_time
     )
 
     return solution, num_arcs_pred, num_arcs_enriched, runtime, status, mip_gap

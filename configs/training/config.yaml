@@ -22,6 +22,8 @@ out_dir: "models/sol_arc_predictor"
 top_k : 200
 regul_lambda : 0.1
 max_iterations_FW : 15
+alpha : 10
+beta : 1
 ##End changes
 log_dir: "logs"
 use_gpu: False

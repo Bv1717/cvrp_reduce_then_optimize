@@ -886,4 +886,58 @@ def cvrp_via_VRP_Easy(demands, arc_index, arc_costs, nb_vehicles,
             print(f"Load : {route.cap_consumption}.\n")
 
     
+from gurobipy import GRB
+def solve_relaxed_flow_cvrp( demands, arc_index, arc_costs, nb_vehicles,
+ vehicle_capacity, connections, time_limit=100, verbose=False ):
     
+    """ Gurobi version of relaxed CVRP flow formulation. Builds, solves,
+    and returns only the solution dictionary. 
+    Returns ------- solution : dict {(i,j): y_ij_value}
+    Empty dict if no feasible solution was found. """ 
+  
+    m = gp.Model("relaxed_CVRP_flow")
+
+    m.setParam("OutputFlag", 0)
+
+    m.Params.TimeLimit = time_limit
+
+    arc_list = [ (int(i), int(j)) for k, (i, j) in enumerate(zip(arc_index[0], arc_index[1])) if connections[k] ]
+
+    cost_dict = { (int(i), int(j)): float(arc_costs[k]) for k, (i, j) in enumerate(zip(arc_index[0], arc_index[1])) if connections[k] }
+
+    depot_candidates = [i for i, d in enumerate(demands) if d == 0]
+
+    if len(depot_candidates) != 1:
+         raise ValueError("Demands must contain exactly one depot (one zero-demand entry).")
+    
+    depot = depot_candidates[0]
+
+    n = len(demands)
+
+    y = {(i, j): m.addVar(lb=0, vtype=GRB.CONTINUOUS, name=f"y_{i}_{j}") for (i, j) in arc_list}
+    f = {(i, j): m.addVar(lb=0, vtype=GRB.CONTINUOUS, name=f"f_{i}_{j}") for (i, j) in arc_list} 
+
+    m.setObjective(gp.quicksum(cost_dict[i, j] * y[i, j] for (i, j) in arc_list), GRB.MINIMIZE) 
+
+    for i in range(n):
+       if i != depot:
+         m.addConstr(gp.quicksum(y[i, j] for j in range(n) if (i, j) in y) == 1, name=f"out_{i}")
+
+    for j in range(n):
+        if j != depot:
+            m.addConstr(gp.quicksum(y[i, j] for i in range(n) if (i, j) in y) == 1, name=f"in_{j}")
+            m.addConstr(gp.quicksum(y[depot, j] for j in range(n) if (depot, j) in y) <= nb_vehicles, name="veh_limit")
+
+    for (i, j) in arc_list:
+        m.addConstr(f[i, j] <= vehicle_capacity * y[i, j], name=f"cap_{i}_{j}")
+
+    for i in range(n):
+         if i != depot:
+             outgoing = gp.quicksum(f[i, j] for j in range(n) if (i, j) in f)
+             incoming = gp.quicksum(f[j, i] for j in range(n) if (j, i) in f)
+             m.addConstr(outgoing - incoming == float(demands[i]), name=f"flow_{i}")
+    m.optimize() 
+    if m.Status != GRB.OPTIMAL and m.Status != GRB.TIME_LIMIT: 
+        return {} 
+    solution = {(i, j): y[i, j].X for (i, j) in y} 
+    return solution
