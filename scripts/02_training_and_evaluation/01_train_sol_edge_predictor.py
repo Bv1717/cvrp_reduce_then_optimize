@@ -24,7 +24,10 @@ import torch
 
 ##Changes
 from core.ml_models.cvrp_sol_predictor import GCNNSolArcPredictor
-from core.utils.ml_utils import CVRPData
+from core.utils.ml_utils import CVRPData, LazyCVRPData
+from core.utils.ml_utils import get_graph_raw_features_for_instance
+from core.utils.ml_utils import fit_cvrp_standard_normalizer_from_paths, get_cvrp_class_weight_from_paths
+from core.data_processing.data_utils import load_sample
 ##End changes
 
 from core.utils.ml_utils import StandardNormalizer
@@ -341,29 +344,27 @@ def main(training_config: DictConfig) -> None:
         training_config.data_path, training_config.num_samples
     )
 
+    use_lazy = getattr(training_config, "lazy_loading", False)
+
     #######################################################
     # Extract features
     #######################################################
 
     if model_config.features == "graph_raw":
-        x_nodes, x_connections, arc_index, nb_vehicles, vehicle_capacity = get_graph_raw_features(sample_paths)
-        with open_dict(model_config):
-            model_config.node_dim = x_nodes[0].shape[-1]
-            model_config.arc_dim = x_connections[0].shape[-1]
-
-        print("Type:", type(x_connections))
-        print("Length:", len(x_connections))
-        # for i, elem in enumerate(x_connections): 
-        #     print(f"Element {i}: type={type(elem)}, shape={getattr(elem, 'shape', None)}, value={elem}")
-        # total_sum = np.sum(x_connections)
-
-        # # Avoid division by zero
-        # if total_sum == 0:
-        #     x_weights = np.zeros_like(x_connections)
-        # else:
-        #     x_weights = training_config.alpha * (x_connections / total_sum)
-        x_weights = np.zeros(1)
-        x = (x_nodes, x_connections, arc_index, nb_vehicles, vehicle_capacity, x_weights)
+        if use_lazy:
+            # Only infer feature dimensions from a single sample (no pre-loading of all samples)
+            s0 = load_sample(sample_paths[0])
+            x_no0, x_a0, _, _, _ = get_graph_raw_features_for_instance(s0["instance"], batch_dim=False)
+            with open_dict(model_config):
+                model_config.node_dim = x_no0.shape[-1]
+                model_config.arc_dim = x_a0.shape[-1]
+        else:
+            x_nodes, x_connections, arc_index, nb_vehicles, vehicle_capacity = get_graph_raw_features(sample_paths)
+            with open_dict(model_config):
+                model_config.node_dim = x_nodes[0].shape[-1]
+                model_config.arc_dim = x_connections[0].shape[-1]
+            x_weights = np.zeros(1)
+            x = (x_nodes, x_connections, arc_index, nb_vehicles, vehicle_capacity, x_weights)
     else:
         raise ValueError
 
@@ -372,24 +373,25 @@ def main(training_config: DictConfig) -> None:
     #######################################################
 
     if model_config.prediction_task == "binary_classification":
-        y = get_raw_targets(
-            sample_paths,
-            binary_target=True,
-            output_dim=True,
-        )
         with open_dict(model_config):
             model_config.arc_output_dim = 1
+
+        # Lazy mode: labels dataset içinde __getitem__'te üretilecek, burada y precompute etmiyoruz.
+        if not use_lazy:
+            y = get_raw_targets(
+                sample_paths,
+                binary_target=True,
+                output_dim=True,
+            )
     else:
-        raise ValueError
+        raise ValueError(f"Unsupported prediction_task: {model_config.prediction_task}")
+
 
     #######################################################
     # Define normalization
     #######################################################
 
-    input_transformer = None
-    if model_config.normalization == "standard":
-        normalizers = tuple([StandardNormalizer() for _ in range(2)]) ##careful
-        input_transformer = MultiInputNormalizer(normalizers)
+    input_transformer = None  # fitted after train/val split (needs train split statistics)
 
     #######################################################
     # Define policy
@@ -462,37 +464,58 @@ def main(training_config: DictConfig) -> None:
         # x_train, y_train = train_data[:-1], train_data[-1]
         # x_val, y_val = val_data[:-1], val_data[-1]
 
-        indices = list(range(len(y)))
+        # Split by sample indices (works for both lazy and non-lazy)
+        indices = list(range(len(sample_paths)))
         train_idx, val_idx = train_test_split(
             indices, test_size=training_config.test_split, random_state=0
         )
 
-        x_nodes_train = [x_nodes[i] for i in train_idx]
-        x_connections_train = [x_connections[i] for i in train_idx]
-        arc_index_train = [arc_index[i] for i in train_idx]
-        nb_vehicles_train = [nb_vehicles[i] for i in train_idx]
-        vehicle_capacity_train = [vehicle_capacity[i] for i in train_idx]
-        x_weights_train = [x_weights[i]*y[i] +(1-y[i])+training_config.beta for i in train_idx]
-        y_train = [y[i] for i in train_idx]
+        train_paths = [sample_paths[i] for i in train_idx]
+        val_paths   = [sample_paths[i] for i in val_idx]
 
-        x_nodes_val = [x_nodes[i] for i in val_idx]
-        x_connections_val = [x_connections[i] for i in val_idx]
-        arc_index_val = [arc_index[i] for i in val_idx]
-        nb_vehicles_val = [nb_vehicles[i] for i in val_idx]
-        vehicle_capacity_val = [vehicle_capacity[i] for i in val_idx]
-        x_weights_val = [x_weights[i]*y[i] +(1-y[i])+training_config.beta for i in val_idx]
-        y_val = [y[i] for i in val_idx]
+        if use_lazy:
+            train_dataset = LazyCVRPData(train_paths)
+            val_dataset   = LazyCVRPData(val_paths)
+        else:
+            x_nodes_train = [x_nodes[i] for i in train_idx]
+            x_connections_train = [x_connections[i] for i in train_idx]
+            arc_index_train = [arc_index[i] for i in train_idx]
+            nb_vehicles_train = [nb_vehicles[i] for i in train_idx]
+            vehicle_capacity_train = [vehicle_capacity[i] for i in train_idx]
+            x_weights_train = [x_weights[0] for _ in train_idx]
+            y_train = [y[i] for i in train_idx]
 
-        train_dataset = CVRPData((x_nodes_train, x_connections_train, arc_index_train,
-                                   nb_vehicles_train, vehicle_capacity_train, x_weights_train), y_train)
-        val_dataset   = CVRPData((x_nodes_val, x_connections_val, arc_index_val,
-                                  nb_vehicles_val, vehicle_capacity_val, x_weights_val),   y_val)
+            x_nodes_val = [x_nodes[i] for i in val_idx]
+            x_connections_val = [x_connections[i] for i in val_idx]
+            arc_index_val = [arc_index[i] for i in val_idx]
+            nb_vehicles_val = [nb_vehicles[i] for i in val_idx]
+            vehicle_capacity_val = [vehicle_capacity[i] for i in val_idx]
+            x_weights_val = [x_weights[0] for _ in val_idx]
+            y_val = [y[i] for i in val_idx]
 
-        if input_transformer is not None:
-            input_transformer.fit([
-                torch.as_tensor(x_nodes_train, dtype=torch.float32),
-                torch.as_tensor(x_connections_train, dtype=torch.float32)
-            ])
+            train_dataset = CVRPData(
+                (x_nodes_train, x_connections_train, arc_index_train,
+                 nb_vehicles_train, vehicle_capacity_train, x_weights_train),
+                y_train
+            )
+            val_dataset = CVRPData(
+                (x_nodes_val, x_connections_val, arc_index_val,
+                 nb_vehicles_val, vehicle_capacity_val, x_weights_val),
+                y_val
+            )
+
+        # Make normalization + class weights identical across lazy and non-lazy:
+        # compute them from the TRAIN SPLIT PATHS (one scan, no feature pre-loading).
+        if model_config.normalization == "standard":
+            input_transformer = fit_cvrp_standard_normalizer_from_paths(
+                train_paths, feature_fun=get_graph_raw_features_for_instance
+            )
+        else:
+            input_transformer = None
+
+        cw = None
+        if model_config.prediction_task == "binary_classification":
+            cw = get_cvrp_class_weight_from_paths(train_paths)
 
         policy = policy_fun(
             model_config=model_config,
@@ -517,55 +540,64 @@ def main(training_config: DictConfig) -> None:
 
     else:
         kf = KFold(n_splits=5, shuffle=True, random_state=0)
-        kf.get_n_splits(y)
-        for i, (train_idx, val_idx) in enumerate(kf.split(y)):
-            logger.info(f"Training on fold {i}")
-            fold_out_dir = os.path.join(out_dir, f"fold_{i}")
+        kf.get_n_splits(sample_paths)
+
+        for fold_i, (train_idx, val_idx) in enumerate(kf.split(sample_paths)):
+            logger.info(f"Training on fold {fold_i}")
+            fold_out_dir = os.path.join(out_dir, f"fold_{fold_i}")
             os.makedirs(fold_out_dir, exist_ok=True)
-            
-            x_nodes_train = [x_nodes[i] for i in train_idx]
-            x_connections_train = [x_connections[i] for i in train_idx]
-            arc_index_train = [arc_index[i] for i in train_idx]
-            nb_vehicles_train = [nb_vehicles[i] for i in train_idx]
-            vehicle_capacity_train = [vehicle_capacity[i] for i in train_idx]
-            # x_weights_train = [x_weights[i]*y[i] +(1-y[i])*training_config.beta for i in train_idx]
-            x_weights_train = [0]
-            y_train = [y[i] for i in train_idx]
 
-            x_nodes_val = [x_nodes[i] for i in val_idx]
-            x_connections_val = [x_connections[i] for i in val_idx]
-            arc_index_val = [arc_index[i] for i in val_idx]
-            nb_vehicles_val = [nb_vehicles[i] for i in val_idx]
-            vehicle_capacity_val = [vehicle_capacity[i] for i in val_idx]
-            # x_weights_val = [x_weights[i]*y[i] +(1-y[i])*training_config.beta for i in val_idx]
-            x_weights_val = [0]
-            y_val = [y[i] for i in val_idx]
+            train_paths = [sample_paths[i] for i in train_idx]
+            val_paths   = [sample_paths[i] for i in val_idx]
 
-            train_dataset = CVRPData((x_nodes_train, x_connections_train, arc_index_train,
-                                      nb_vehicles_train, vehicle_capacity_train, x_weights_train), y_train)
-            val_dataset   = CVRPData((x_nodes_val,   x_connections_val,   arc_index_val,
-                                      nb_vehicles_val, vehicle_capacity_val, x_weights_val),   y_val)
+            if use_lazy:
+                train_dataset = LazyCVRPData(train_paths)
+                val_dataset   = LazyCVRPData(val_paths)
+            else:
+                x_nodes_train = [x_nodes[i] for i in train_idx]
+                x_connections_train = [x_connections[i] for i in train_idx]
+                arc_index_train = [arc_index[i] for i in train_idx]
+                nb_vehicles_train = [nb_vehicles[i] for i in train_idx]
+                vehicle_capacity_train = [vehicle_capacity[i] for i in train_idx]
+                x_weights_train = [x_weights[0] for _ in train_idx]
+                y_train = [y[i] for i in train_idx]
 
-            if input_transformer is not None:
-                # Remove the leading batch dimension so each arr is [num_nodes, node_dim]
-                all_nodes = torch.cat(
-                    [torch.as_tensor(arr, dtype=torch.float32).squeeze(0) for arr in x_nodes_train],
-                    dim=0
-                )  # shape [sum(num_nodes_i), node_dim]
+                x_nodes_val = [x_nodes[i] for i in val_idx]
+                x_connections_val = [x_connections[i] for i in val_idx]
+                arc_index_val = [arc_index[i] for i in val_idx]
+                nb_vehicles_val = [nb_vehicles[i] for i in val_idx]
+                vehicle_capacity_val = [vehicle_capacity[i] for i in val_idx]
+                x_weights_val = [x_weights[0] for _ in val_idx]
+                y_val = [y[i] for i in val_idx]
 
-                all_edges = torch.cat(
-                    [torch.as_tensor(arr, dtype=torch.float32).squeeze(0) for arr in x_connections_train],
-                    dim=0
-                )  # shape [sum(num_edges_i), edge_dim]
+                train_dataset = CVRPData(
+                    (x_nodes_train, x_connections_train, arc_index_train,
+                     nb_vehicles_train, vehicle_capacity_train, x_weights_train),
+                    y_train
+                )
+                val_dataset = CVRPData(
+                    (x_nodes_val, x_connections_val, arc_index_val,
+                     nb_vehicles_val, vehicle_capacity_val, x_weights_val),
+                    y_val
+                )
 
-                input_transformer.fit([all_nodes, all_edges])
+            if model_config.normalization == "standard":
+                input_transformer = fit_cvrp_standard_normalizer_from_paths(
+                    train_paths, feature_fun=get_graph_raw_features_for_instance
+                )
+            else:
+                input_transformer = None
+
+            cw = None
+            if model_config.prediction_task == "binary_classification":
+                cw = get_cvrp_class_weight_from_paths(train_paths)
 
             policy = policy_fun(
                 model_config=model_config,
                 adam_params=adam_params,
                 lr_schedule=lr_schedule,
                 input_transformer=input_transformer,
-                class_weight=class_weight_fun(y_train),
+                class_weight=cw,
             )
 
             training_wrapper(

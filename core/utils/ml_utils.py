@@ -890,6 +890,87 @@ class MultiInputNormalizer:
         return tuple(state)
 
 
+
+###################################
+# Lazy-friendly helpers (CVRP)
+###################################
+
+def fit_cvrp_standard_normalizer_from_paths(sample_paths, feature_fun=None):
+    """Fit a standard (mean/std) normalizer for CVRP node/arc features by scanning paths once.
+
+    This keeps the *same normalization behavior* as the non-lazy pipeline (global mean/std over
+    all nodes and all arcs in the TRAIN SPLIT), but without storing all features in memory.
+
+    Parameters
+    ----------
+    sample_paths : list[str]
+        Training sample file paths.
+    feature_fun : callable, optional
+        Function(instance, batch_dim=False) -> (x_nodes, x_arcs, arc_index, nb_vehicles, capacity).
+        Defaults to get_graph_raw_features_for_instance.
+
+    Returns
+    -------
+    MultiInputNormalizer
+        Two-input normalizer for (node_features, arc_features).
+    """
+    if feature_fun is None:
+        feature_fun = get_graph_raw_features_for_instance
+
+    # Running stats per feature dimension: count, sum, sumsq
+    def init_state():
+        return {"n": 0, "sum": None, "sumsq": None}
+
+    def update(state, x_np):
+        x = torch.as_tensor(x_np, dtype=torch.float32)
+        # x is [N, F]
+        if state["sum"] is None:
+            state["sum"] = torch.zeros(x.shape[1], dtype=torch.float32)
+            state["sumsq"] = torch.zeros(x.shape[1], dtype=torch.float32)
+        state["n"] += x.shape[0]
+        state["sum"] += x.sum(dim=0)
+        state["sumsq"] += (x * x).sum(dim=0)
+        return state
+
+    def finalize(state):
+        if state["n"] <= 1:
+            mean = state["sum"] / max(state["n"], 1)
+            std = torch.ones_like(mean)
+        else:
+            mean = state["sum"] / state["n"]
+            var = (state["sumsq"] / state["n"]) - mean * mean
+            var = torch.clamp(var, min=0.0)
+            std = torch.sqrt(var)
+            std[std < 1e-5] = 1.0
+        return mean, std
+
+    node_state = init_state()
+    arc_state = init_state()
+
+    for p in sample_paths:
+        sample = load_sample(p)
+        x_no, x_a, _, _, _ = feature_fun(sample["instance"], batch_dim=False)
+        node_state = update(node_state, x_no)
+        arc_state = update(arc_state, x_a)
+
+    mean_nodes, std_nodes = finalize(node_state)
+    mean_arcs, std_arcs = finalize(arc_state)
+
+    normalizers = (
+        StandardNormalizer(mean=mean_nodes, std=std_nodes),
+        StandardNormalizer(mean=mean_arcs, std=std_arcs),
+    )
+    return MultiInputNormalizer(normalizers)
+
+
+def get_cvrp_class_weight_from_paths(sample_paths):
+    """Compute binary class weight with the *same* logic as the original pipeline.
+
+    Uses get_raw_targets(...) + get_class_weights(binary=True).
+    """
+    y = get_raw_targets(sample_paths, binary_target=True, output_dim=True)
+    return get_class_weights(y, binary=True)
+
 ############################
 # Training wrapper and helper functions
 ############################
@@ -1513,6 +1594,65 @@ class CVRPData(Dataset):
     def __len__(self):
         return len(self.y)
     
+
+
+class LazyCVRPData(Dataset):
+    """Lazy dataset for CVRP samples.
+
+    Stores only sample file paths and loads a single sample on demand.
+    Keeps memory low because raw features/labels are built per sample.
+
+    Notes
+    -----
+    - Features are produced by get_graph_raw_features_for_instance(..., batch_dim=False).
+    - Labels are produced with the same arc ordering as instance.arc_lookup via sol_to_list(...).
+    """
+
+    def __init__(self, sample_paths):
+        super().__init__()
+        self.sample_paths = list(sample_paths)
+
+    def __len__(self):
+        return len(self.sample_paths)
+
+    def __getitem__(self, index):
+        sample = load_sample(self.sample_paths[index])
+
+        # Features (no batch dimension)
+        x_no, x_a, arc_index, nb_vehicles, capacity_vehicle = get_graph_raw_features_for_instance(
+            sample["instance"], batch_dim=False
+        )
+
+        x_nodes = torch.tensor(x_no, dtype=torch.float32)
+        x_connections = torch.tensor(x_a, dtype=torch.float32)
+        edge_index = torch.tensor(arc_index, dtype=torch.long)
+
+        nb_vehicles = torch.tensor(nb_vehicles, dtype=torch.float32)
+        vehicle_capacity = torch.tensor(capacity_vehicle, dtype=torch.float32)
+        demands_list = torch.tensor(x_no, dtype=torch.int64)
+
+        # Binary arc labels (E x 1)
+        sol = sol_to_list(sample["solution"], sample["instance"].arc_lookup)
+        sol = (sol > 0).astype(np.float32)
+        E_y = sol.shape[0]
+        E_feat = x_a.shape[0]
+        assert E_feat == E_y, f"Edge-label mismatch: {E_feat} vs {E_y}"
+        y = torch.tensor(sol[:, None], dtype=torch.float32)
+
+        return Data(
+            x=x_nodes,
+            edge_index=edge_index,
+            edge_attr=x_connections,
+            y=y,
+            nb_vehicles=nb_vehicles,
+            vehicle_capacity=vehicle_capacity,
+            demands=demands_list,
+            x_weights=0,
+        )
+
+
+
+
 def save_checkpoint(
     policy, exp_dict, epoch, model_config, training_config, chkpnt_path
 ):
