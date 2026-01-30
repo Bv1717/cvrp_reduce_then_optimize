@@ -24,8 +24,11 @@ regul_lambda : 0.1
 max_iterations_FW : 15
 alpha : 10
 beta : 1
+<<<<<<< HEAD
 Monte_Carlo_nb_iterations : 20
 sd_perturbation : 0.001
+=======
+>>>>>>> b4c947177708e6f6f6ee2fa2d409333e34a2020a
 ##End changes
 log_dir: "logs"
 use_gpu: False

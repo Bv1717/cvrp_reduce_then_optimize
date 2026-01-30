@@ -501,7 +501,20 @@ class BaseSolArcPredictor(BaseLearner):
 
         true_total_loss = 0
 
-        y_hat_predictions = []
+        # y_hat_predictions = []
+        # for i, instance in enumerate(instances):
+        #     arcs_list = [(int(src) , int(dst)) for src, dst in zip(instance.edge_index[0], instance.edge_index[1])]
+
+        #     true_arc_solution = true_arc_list[edge_pos_instance : instance.num_edges + edge_pos_instance].squeeze().tolist()
+        #     true_arc_solution_tensor = true_arc_list[edge_pos_instance : instance.num_edges + edge_pos_instance].squeeze()
+        #     predicted_costs_list = arc_predictions[edge_pos_instance : instance.num_edges + edge_pos_instance].squeeze().tolist()
+        #     predicted_costs_tensor = arc_predictions[
+        #         edge_pos_instance : edge_pos_instance + instance.num_edges
+        #     ].squeeze()  
+        #     edge_pos_instance += instance.num_edges 
+
+        #     demands_list = instance.demands.squeeze().tolist()
+        #     relevant_connections = [True]*len(arcs_list)
 
         with ThreadPoolExecutor(max_workers=20) as executor:
             results = list(executor.map(
