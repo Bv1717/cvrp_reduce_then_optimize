@@ -1,0 +1,12 @@
+- data_path=data/undirected_samples_Munich_1000_100
+- model=gcnn
+- model.num_conv_layers=6
+- model.num_dense_layers=2
+- model.hidden_layer_dim=20
+- out_dir=trained_models_undirected_Munich_1000_100
+- seed=0
+- cross_validate=true
+- train_batch_size=10
+- alpha=2000000
+- beta=0.001
+- top_k=7

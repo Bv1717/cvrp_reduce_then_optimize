@@ -632,13 +632,25 @@ def main(cfg: DictConfig) -> None:
 
     for counter, instance_path in enumerate(instance_paths):
 
-        if((counter < 100) or counter > 200):
+        if(counter < 10 or counter > 20):
             continue
 
         instance_id = instance_path.split("/")[-1].split(".")[0].split("_")[-1]
         solution_filename = f"sol_instance_{instance_id}.pkl.gz"
 
         # Initialize result dict
+
+
+
+        # if "X-n" in instance_path and counter >3:
+        #     print("This is an X instance")
+        #     time_to_solve = 1000
+        #     instance_id = os.path.basename(instance_path).split(".")[0]
+        #     print("instance_id : ", instance_id)
+        # else:
+        #     continue
+
+        solution_filename = f"sol_instance_{instance_id}.pkl.gz"
         result_dict = {
             "instance_path": instance_path,
             "method": method,
@@ -651,7 +663,8 @@ def main(cfg: DictConfig) -> None:
         )
 
         # Load instance
-        instance = load_instance(instance_path)
+        instance, instance_solution = load_instance(instance_path)
+
 
         # Solve exactly (Gurobi)
         if method == "exact":
@@ -700,9 +713,23 @@ def main(cfg: DictConfig) -> None:
             
             all_connections = [True]*len(instance.arc_costs)
 
-            _, exact_objective_value = heu_solve_HGS_VRP(instance.demands, instance.arc_index, 
-                      instance.arc_costs, instance.nb_vehicles, instance.vehicle_capacity, 
-                      all_connections)
+            exact_objective_value = sum(instance_solution[(u,v)] * instance.arc_costs[k] for k, (u,v) in 
+                             enumerate(zip(instance.arc_index[0], instance.arc_index[1])))
+            
+            # for k, (u,v) in enumerate(zip(instance.arc_index[0], instance.arc_index[1])):
+            #     print("arc : ", (u,v), " with cost : ", instance.arc_costs[k])
+            
+            # for key in instance_solution.keys():
+            #     if(instance_solution[key]>0):
+            #         print(key, " : ",instance_solution[key] )
+            
+            print("objective_value = ", exact_objective_value)
+
+            # _, exact_objective_value = heu_solve_HGS_VRP(instance.demands, instance.arc_index, 
+            #           instance.arc_costs, instance.nb_vehicles, instance.vehicle_capacity, 
+            #           all_connections)
+            
+            test_list = []
 
             for thrsh in thresholds:
                 start = time()
@@ -712,23 +739,26 @@ def main(cfg: DictConfig) -> None:
                     num_arcs_enriched,
                     solver_runtime,
                     solver_status,
-                    mip_gap
+                    optimal_value
                 ) = ml_based_cvrp_reduction(
                     instance,
                     predictor_model=arc_predictor_model[0],
+                    test_list = test_list,
                     threshold_type=threshold_type,
                     threshold=thrsh,
                     decoder=decoder,
                     decoder_cfg=decoder_cfg,
                     decoder_env=decoder_env,
                     seed=seed,
+                    HGS_run_time=1000
                 )
                 runtime = time() - start
                 result_dict_k = result_dict.copy()
                 result_dict_k.update(
                     {
                         "solution": sol,
-                        "objective_value": instance.eval_sol_dict(sol),
+                        # "objective_value": instance.eval_sol_dict(sol),
+                        "objective_value": optimal_value,
                         "exact_objective_value": exact_objective_value,
                         "runtime": runtime,
                         "solver_runtime": solver_runtime,
@@ -740,8 +770,8 @@ def main(cfg: DictConfig) -> None:
                 )
                 if solver_status is not None:
                     result_dict_k["solver_status"] = solver_status
-                if mip_gap is not None:
-                    result_dict_k["mip_gap"] = mip_gap
+                # if mip_gap is not None:
+                #     result_dict_k["mip_gap"] = mip_gap
                 solution_path = os.path.join(
                     cfg.solution_dir,
                     method,

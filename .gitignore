@@ -12,4 +12,8 @@ gurobi.lic
 
 __pycache__/
 /.vscode
+interlog_gen-master/
 resources/
+data/
+runtime_benchmarking_plot/
+benchmarking_BCE_loss_Munich_5000_1000_500/

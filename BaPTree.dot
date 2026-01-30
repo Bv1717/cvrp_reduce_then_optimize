@@ -2,5 +2,9 @@
 
 digraph master_0_BaP_Tree {
 edge[fontname = "Courier", fontsize = 10];
-n1 [label="N_1 (1.26s) \nBOUND [137008.00]"];
+n1 [label="N_1 (11.10s) \n[531957.29,532106.00]"];
+n2 [label="N_2 (24.48s) \nBOUND [532106.00]"];
+n1 -> n2 [ label = " EDGE[75,97] >= 1  " ];
+n3 [label="N_3 (24.78s) \nBOUND [532106.00]"];
+n1 -> n3 [ label = " EDGE[75,97] <= 0  " ];
 }

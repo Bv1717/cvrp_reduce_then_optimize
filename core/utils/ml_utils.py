@@ -1305,6 +1305,8 @@ def get_graph_raw_features_for_instance(instance, batch_dim=True):
         3-element tuple containing node features, arc features and arc_index.
 
     """
+
+    # print("instance : ", instance)
     x_nodes = np.array([node.demand for node in instance.nodes])[:, None] 
     x_a = np.array(instance.arc_costs)[:, None]
     arc_index = np.array(instance.arc_index)
@@ -1479,14 +1481,14 @@ class CVRPData(Dataset):
 
     def __init__(self, x, y):
         super(CVRPData, self).__init__()
-        self.x_nodes, self.x_connections, self.arc_index, self.nb_vehicles, self.vehicle_capacity = x
+        self.x_nodes, self.x_connections, self.arc_index, self.nb_vehicles, self.vehicle_capacity, self.x_weights = x
         self.y = y
 
     def __getitem__(self, index):
         # Convert numpy arrays to torch tensors
         x_nodes = torch.tensor(self.x_nodes[index], dtype=torch.float)
         x_connections = torch.tensor(self.x_connections[index], dtype=torch.float)
-
+        # x_weights_list = torch.tensor(self.x_weights[index], dtype=torch.float)
         # Ensure arc_index is shape [2, E]
         arc_index = torch.tensor(self.arc_index[index], dtype=torch.long)
 
@@ -1503,7 +1505,8 @@ class CVRPData(Dataset):
             y=y,                       # label
             nb_vehicles=nb_vehicles,
             vehicle_capacity=vehicle_capacity,
-            demands = demands_list
+            demands = demands_list,
+            x_weights= 0
         )
         return data
 
@@ -1644,15 +1647,12 @@ def training_wrapper(
     top_k = training_config.top_k
     regul_lambda = training_config.regul_lambda
     max_iterations_FW = training_config.max_iterations_FW
-
-    # top_k = 140
-    # regul_lambda = 0.1
-    # max_iterations = 15
+    Monte_Carlo_nb_iterations = training_config.Monte_Carlo_nb_iterations
+    sd_perturbation = training_config.sd_perturbation
 
 
     # Evaluate policy before first update
-    FW_env = Frank_Wolfe_regularisation_env()
-    print("Environment created successfully.")
+    FW_env = None
     p = policy.evaluate({"train": train_loader, "validation": val_loader}, FW_env,
                                 top_k, regul_lambda, max_iterations_FW)
     for key, value in p.items():
@@ -1676,9 +1676,10 @@ def training_wrapper(
         for batch in train_loader:
             # Update model parameters
             loss, _, true_loss = policy.train_step(batch, FW_env, top_k,
-                                                    regul_lambda, max_iterations_FW)
+                                                    regul_lambda, max_iterations_FW,
+                                                     Monte_Carlo_nb_iterations, sd_perturbation)
             # running_loss += loss.cpu().item()
-            running_loss += true_loss
+            running_loss += true_loss.cpu().item()
         running_loss = running_loss / len(train_loader)
 
         train_time = time.time() - start_time
@@ -1690,24 +1691,27 @@ def training_wrapper(
         # Evaluate model performance
         if eval_train_data:
             p = policy.evaluate({"train": train_loader, "validation": val_loader}, FW_env,
-                                top_k, regul_lambda, max_iterations_FW)
+                                top_k, regul_lambda, max_iterations_FW,
+                                Monte_Carlo_nb_iterations, sd_perturbation)
         else:
             p = policy.evaluate({"validation": val_loader}, FW_env,
-                                top_k, regul_lambda, max_iterations_FW)
+                                top_k, regul_lambda, max_iterations_FW,
+                                 Monte_Carlo_nb_iterations, sd_perturbation )
         for key, value in p.items():
             exp_dict["performance"][key].append(value)
 
         y_true, y_pred = [], []
         policy.model.eval()
-        with torch.no_grad():
-            for batch in val_loader:
-                _, outputs,_ = policy.forward_pass(batch, FW_env,
-                                top_k, regul_lambda, max_iterations_FW)
-                preds = (outputs > 0.5).int().cpu().numpy()  # binary case
-                y_true.extend(batch.y.cpu().numpy())
-                y_pred.extend(preds)
+        # with torch.no_grad():
+        #     for batch in val_loader:
+        #         _, outputs,_ = policy.forward_pass(batch, FW_env,
+        #                         top_k, regul_lambda, max_iterations_FW)
+        #         preds = (outputs > 0.5).int().cpu().numpy()  # binary case
+        #         y_true.extend(batch.y.cpu().numpy())
+        #         y_pred.extend(preds)
 
-        cm = confusion_matrix(y_true, y_pred)
+        # cm = confusion_matrix(y_true, y_pred)
+        cm = 0
         exp_dict["performance"]["confusion_matrix"].append(cm)
 
         # Adapt learning rate based on performance stagnation

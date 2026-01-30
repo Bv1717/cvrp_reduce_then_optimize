@@ -216,6 +216,54 @@ class GraphLayerAtt(torch.nn.Module):
 
         return h_v, h_a
 
+    # def forward(self, x_v, x_a, arc_index):
+    #     # x_v:  (n+1) x 1, x_a:  m x 2
+
+    #     src, dst = arc_index
+
+    #     h_self = self.dense_vv(x_v)
+
+    #     e = self.attention_va(x_a).squeeze(-1)   # (m,)
+    #     # e is attention logits per edge
+
+    #     # compute softmax per destination node
+    #     # Step 1: max per destination
+    #     num_nodes = x_v.size(0)
+    #     max_per_dst = x_v.new_full((num_nodes,), float('-inf'))
+    #     max_per_dst = max_per_dst.index_reduce(0, dst, e, reduce='amax')
+
+    #     max_per_src = x_v.new_full((num_nodes,), float('-inf'))
+    #     max_per_src = max_per_src.index_reduce(0, src, e, reduce='amax')
+    #     # Step 2: subtract and exponentiate
+    #     exp_e = torch.exp(e - max_per_dst[dst])
+    #     exp_e_src = torch.exp(e - max_per_src[src])
+    #     # Step 3: normalize
+    #     denom = torch.zeros_like(max_per_dst).index_add(0, dst, exp_e)
+    #     denom_src = torch.zeros_like(max_per_src).index_add(0, src, exp_e_src)
+    #     attn = exp_e / denom[dst]
+    #     attn = attn.unsqueeze(-1)
+    #     attn_src = exp_e_src / denom_src[src]
+    #     attn_src = attn_src.unsqueeze(-1)
+    #     msg_from_arcs = self.dense_va(x_a) * attn
+    #     msg_from_arcs_src = self.dense_va(x_a)* attn_src
+
+
+    #     # Aggregate both into destination nodes
+    #     h_msg = torch.zeros_like(h_self)
+    #     h_msg = h_msg.index_add(0, dst, msg_from_arcs)
+    #     h_msg_src = torch.zeros_like(h_self)
+    #     h_msg_src = h_msg_src.index_add(0, src, msg_from_arcs_src)
+
+    #     h_v = h_msg + h_self + h_msg_src
+    #     # edge update
+    #     h_a = (
+    #         self.dense_aa(x_a)
+    #         + self.dense_av(x_v[src])
+    #         + self.dense_av(x_v[dst])
+    #     )
+
+    #     return h_v, h_a
+
 
 class GraphNNAtt(torch.nn.Module):
     """GNN with attention.

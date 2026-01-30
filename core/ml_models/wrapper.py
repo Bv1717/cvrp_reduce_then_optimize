@@ -10,6 +10,9 @@ import numpy as np
 import torch
 from torch_geometric.data import Data
 import gurobipy as gp
+import matplotlib.pyplot as plt
+import networkx as nx
+
 
 # from core.utils.cvrp import CapacitatedFCTP
 # from core.utils.cvrp import FixedStepFCTP
@@ -27,6 +30,7 @@ from core.cvrp_solvers.ip_grb import cvrp_subset_connections
 from core.cvrp_solvers.ip_grb import sol_vals
 from core.cvrp_solvers.heuristics import Clark_Wright_heuristic
 from core.cvrp_solvers.heuristics import heu_solve_HGS_VRP
+from core.cvrp_solvers.ip_grb import cvrp_via_VRP_Easy
 ##End changes
 
 
@@ -389,6 +393,121 @@ from core.cvrp_solvers.heuristics import heu_solve_HGS_VRP
 ##Changes 
 
 
+def plot_edge_heatmap(instance, arc_index, arc_likelihood, cmap="viridis"):
+    # Build graph
+    G = nx.DiGraph()  # or Graph() if undirected
+
+    # Add nodes with coordinates
+    for i, node in enumerate(instance.nodes):
+        G.add_node(i, pos=(node.x, node.y))
+
+
+    # Add edges with weights
+    src, dst = arc_index
+    for i in range(len(src)):
+        G.add_edge(int(src[i]), int(dst[i]), weight=float(arc_likelihood[i]))
+
+    # Extract positions
+    pos = nx.get_node_attributes(G, "pos")
+
+    # Normalize weights for colormap
+    weights = np.array([G[u][v]["weight"] for u, v in G.edges()])
+    norm = (weights - weights.min()) / (weights.max() - weights.min() + 1e-9)
+
+    # Draw nodes
+    nx.draw_networkx_nodes(G, pos, node_size=50, node_color="black")
+
+    # Draw edges with colormap
+    edges = G.edges()
+    nx.draw_networkx_edges(
+        G,
+        pos,
+        edgelist=edges,
+        edge_color=norm,
+        edge_cmap=plt.cm.get_cmap(cmap),
+        width=1 + 3 * norm,  # thicker for high weight
+        alpha=0.8,
+    )
+
+    # Add colorbar
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=weights.min(), vmax=weights.max()))
+    sm.set_array([])
+    plt.colorbar(sm, label="Predicted edge weight")
+
+    plt.axis("equal")
+    plt.title("GNN Edge Likelihood Heatmap")
+    plt.show()
+
+
+
+def plot_top_k_edges(instance, arc_index, arc_likelihood, k, cmap="viridis"):
+    """
+    Draw only the top-k edges according to arc_likelihood.
+    """
+
+    # Convert to numpy
+    weights = np.array(arc_likelihood).reshape(-1)
+    src, dst = arc_index
+
+    # ---- 1. Select top-k edges ----
+    if k < 1:  
+        # interpret k as a fraction (e.g., 0.1 = top 10%)
+        k = int(len(weights) * k)
+
+    k = max(1, min(k, len(weights)))  # clamp
+
+
+    top_idx = np.argsort(weights)[-k:]  # indices of top-k edges
+
+    # ---- 2. Build graph with only top-k edges ----
+    G = nx.DiGraph()
+
+    # Add nodes with coordinates
+    for i, node in enumerate(instance.nodes):
+        G.add_node(i, pos=(node.x, node.y))
+
+    # Add only selected edges
+    for i in top_idx:
+        G.add_edge(int(src[i]), int(dst[i]), weight=float(weights[i]))
+
+    # ---- 3. Extract positions and normalized weights ----
+    pos = nx.get_node_attributes(G, "pos")
+    edge_weights = np.array([G[u][v]["weight"] for u, v in G.edges()])
+    norm = (edge_weights - edge_weights.min()) / (edge_weights.max() - edge_weights.min() + 1e-9)
+
+    # ---- 4. Draw ----
+    plt.figure(figsize=(8, 8))
+
+    # Draw nodes
+    nx.draw_networkx_nodes(G, pos, node_size=50, node_color="black")
+
+    # Draw edges with colormap
+    nx.draw_networkx_edges(
+        G,
+        pos,
+        edgelist=G.edges(),
+        edge_color=norm,
+        edge_cmap=plt.cm.get_cmap(cmap),
+        width=1 + 3 * norm,
+        alpha=0.9,
+    )
+
+    
+
+    # Colorbar
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=edge_weights.min(), vmax=edge_weights.max()))
+    sm.set_array([])
+    plt.colorbar(sm, label="Predicted edge weight")
+
+    plt.axis("equal")
+    plt.title(f"Top-{k} Predicted Edges (Heatmap)")
+    plt.show()
+
+
+
+
+
+
 def get_max_likelihood_sol(instance, relevant_connections, prediction):
     """Get feasible solution that greedily maximizes the total edge likelihood.
 
@@ -422,7 +541,7 @@ def get_max_likelihood_sol(instance, relevant_connections, prediction):
     all_connections = [True]*len(handmade_costs)
     sol, _ = heu_solve_HGS_VRP(instance.demands, instance.arc_index, handmade_costs, 
                             instance.nb_vehicles, instance.vehicle_capacity, all_connections,
-                            heu_time=2)
+                            heu_time=5)
     # sol = Clark_Wright_heuristic(instance.demands, instance.arc_index,
     #                             handmade_costs, instance.nb_vehicles,
     #                             instance.vehicle_capacity)
@@ -473,6 +592,7 @@ def sol_arc_predictor_wrapper(instance, predictor_model):
 def get_reduced_problem(
     instance,
     predictor_model,
+    test_list=None,
     threshold_type="size",
     threshold=0.5,
 ):
@@ -505,11 +625,19 @@ def get_reduced_problem(
     # get arc values/likelihoods
     arc_likelihood, arc_index = sol_arc_predictor_wrapper(instance, predictor_model)
 
+
+    # plot_edge_heatmap(instance, arc_index, arc_likelihood)
+
+    # plot_top_k_edges(instance, arc_index, arc_likelihood, k=1000)
+
+
     # select the most likely arcs
     if threshold_type == "size":
         threshold = np.quantile(arc_likelihood, 1 - threshold)
     relevant_connections = arc_likelihood >= threshold
     relevant_connections = relevant_connections.reshape(-1) 
+
+    
 
     num_arcs_pred = np.sum(relevant_connections)
 
@@ -538,6 +666,7 @@ def solve_reduced_problem(
     decoder_cfg=None,
     decoder_env=None,
     seed=0,
+    HGS_run_time=100
 ):
     """Wrapper function to solve reduced problem.
 
@@ -604,20 +733,24 @@ def solve_reduced_problem(
         # status = model.Status
         # mip_gap = model.MIPGap
 
-        solution, _ = heu_solve_HGS_VRP(instance.demands, instance.arc_index, 
-                      instance.arc_costs, instance.nb_vehicles,
-                        instance.vehicle_capacity, relevant_connections)
-    return solution, 1, status, 0  #solution, runtime, status, mip_gap
+        # solution, _ = heu_solve_HGS_VRP(instance.demands, instance.arc_index, 
+        #               instance.arc_costs, instance.nb_vehicles,
+        #                 instance.vehicle_capacity, relevant_connections, heu_time=HGS_run_time)
+        solution,runtime, optimal_value  = cvrp_via_VRP_Easy(instance.demands, instance.arc_index, instance.arc_costs,
+                                       instance.nb_vehicles, instance.vehicle_capacity, relevant_connections)
+    return solution, runtime, status, optimal_value  #solution, runtime, status, mip_gap
 
 def ml_based_cvrp_reduction(
     instance,
     predictor_model,
+    test_list=None,
     threshold_type="size",
     threshold=0.5,
     decoder="exact",
     decoder_cfg=None,
     decoder_env=None,
     seed=0,
+    HGS_run_time=100
 ):
     """Wrapper function for ML-based reduce-then-optimize.
 
@@ -663,11 +796,12 @@ def ml_based_cvrp_reduction(
     relevant_connections, arc_index, (num_arcs_pred, num_arcs_enriched) = get_reduced_problem(
         instance,
         predictor_model,
+        test_list,
         threshold_type,
         threshold,
     )
 
-    solution, runtime, status, mip_gap = solve_reduced_problem(
+    solution, runtime, status, optimal_value = solve_reduced_problem(
         instance,
         arc_index,
         relevant_connections,
@@ -675,6 +809,7 @@ def ml_based_cvrp_reduction(
         decoder_cfg,
         decoder_env,
         seed,
+        HGS_run_time
     )
 
-    return solution, num_arcs_pred, num_arcs_enriched, runtime, status, mip_gap
+    return solution, num_arcs_pred, num_arcs_enriched, runtime, status, optimal_value

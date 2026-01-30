@@ -8,6 +8,8 @@ import torch
 import matplotlib.pyplot as plt
 from pyvrp import Model as HGS_Model
 from pyvrp.stop import MaxRuntime as HGS_MaxRuntime
+import re
+import math
 # from typing import List
 
 from core.utils.cvrp import CVRP_node
@@ -22,6 +24,8 @@ from core.evaluation.benchmarking_utils import get_objval_by_method
 from core.evaluation.benchmarking_utils import get_runtimes_by_method
 from core.evaluation.benchmarking_utils import get_solver_runtimes_by_method
 from core.evaluation.benchmarking_utils import get_num_arcs_used_by_method
+
+from core.data_processing.data_utils import dict_to_instance
 
 from sklearn.metrics import ConfusionMatrixDisplay
 
@@ -370,18 +374,19 @@ def solve_HGS_VRP_test_cluster(instance, path):
         pkl.dump(sample, f)
 
 def generate_benchmark_plot(solution_dir):
-    num_arcs_pred_data, num_arcs_enriched_data = get_num_edges_by_method(solution_dir)
-    runtime_data = get_runtimes_by_method(solution_dir)
-    solver_runtime_data = get_solver_runtimes_by_method(solution_dir)
-    mip_gap_data = get_mip_gap_by_method(solution_dir)
+    # num_arcs_pred_data, num_arcs_enriched_data = get_num_edges_by_method(solution_dir)
+    # runtime_data = get_runtimes_by_method(solution_dir)
+    # solver_runtime_data = get_solver_runtimes_by_method(solution_dir)
+    # mip_gap_data = get_mip_gap_by_method(solution_dir)
     opt_gap_data = get_optgaps_by_method(solution_dir)
-    objval_data = get_objval_by_method(solution_dir)
-    num_arcs_used_data = get_num_arcs_used_by_method(solution_dir)
+    # objval_data = get_objval_by_method(solution_dir)
+    # num_arcs_used_data = get_num_arcs_used_by_method(solution_dir)
 
-    print(num_arcs_used_data)
+    # print(num_arcs_used_data)
 
 
-    x = range(len(next(iter(opt_gap_data.values())))) 
+    # x = range(len(next(iter(opt_gap_data.values())))) 
+    x = range(52)
 
     num_methods = len(opt_gap_data)
     fig, axes = plt.subplots(num_methods, 1, figsize=(10, 6), sharex=True)
@@ -400,8 +405,353 @@ def generate_benchmark_plot(solution_dir):
     axes[-1].set_xlabel("Instance index")
     plt.tight_layout()
     plt.show()
+
+
+def parse_cvrp_literatur_instances(path_instance):
+    nb_vehicles = 2*int(re.search(r'k(\d+)', path_instance).group(1))
+    with open(path_instance, "r") as f :
+        lines = f.readlines()
+
+    coords = {}
+    demands = {}
+    vehicle_capacity = None
+    mode = None
+
+    for line in lines : 
+        line = line.strip()
+
+        if line.startswith("CAPACITY"):
+            vehicle_capacity = int(line.split(":")[1])
+
+        if line.startswith("NODE_COORD_SECTION"):
+            mode="coords"
+            continue
+        if line.startswith("DEMAND_SECTION"):
+            mode="demands"
+            continue
+        if line.startswith("DEPOT_SECTION"): 
+            mode = "depot"
+            continue
+        if line.startswith("EOF"):
+            break
+
+        if mode=="coords" and line:
+            parts = line.split()
+            idx = int(parts[0])-1
+            x = float(parts[1])
+            y = float(parts[2])
+            coords[idx] = (x, y)
+
+        if mode=="demands" and line:
+            parts = line.split()
+            idx = int(parts[0])-1
+            demands[idx] = int(parts[1])
+
+
+        
+
+    nodes = []
+
+    for idx in sorted(coords.keys()):
+        x, y = coords[idx]
+        d = demands[idx]
+        nodes.append(CVRP_node(idx, d, x, y))
+
+    arc_index_list = [[],[]]
+    arc_cost_list = []
+
+    node_ids = sorted(coords.keys())
+
+    for i in node_ids:
+        x1, y1 = coords[i]
+        for j in node_ids:
+            if i != j:
+                x2, y2 = coords[j]
+
+                dist = round(math.sqrt((x1-x2)**2 + (y1-y2)**2))
+                arc_index_list[0].append(i)
+                arc_index_list[1].append(j)
+                arc_cost_list.append(dist)
+
+    arc_index = np.array(arc_index_list)
+    arc_costs = np.array(arc_cost_list)
+    return CVRP(nodes, arc_index, vehicle_capacity, arc_costs, nb_vehicles)
+
+def parse_solution_file(path, depot=0):
+    arcs = {}   # dictionary of arcs (u, v) → 1
+
+    with open(path, "r") as f:
+        lines = f.readlines()
+
+    for line in lines:
+        line = line.strip()
+
+        # Stop at cost line
+        if line.startswith("Cost"):
+            break
+
+        # Parse route lines
+        if line.startswith("Route"):
+            # Example: "Route #1: 31 46 35"
+            parts = line.split(":")[1].strip().split()
+            route = [int(x) for x in parts]
+
+            # Add depot → first
+            arcs[(depot, route[0])] = 1
+
+            # Add internal arcs
+            for u, v in zip(route[:-1], route[1:]):
+                arcs[(u, v)] = 1
+
+            # Add last → depot
+            arcs[(route[-1], depot)] = 1
+
+    return arcs
+
+def generate_undirected_solution(instances_path, new_instance_path):
+
+    os.makedirs(new_instance_path, exist_ok=True)
+    for root, filename, files in os.walk(instances_path):
+        for instance_file in files:
+            with gzip.open(instances_path +"/" + instance_file, "rb") as f:
+                result_dict = pkl.load(f)
+            
+            solution_dict = result_dict["solution"]
+            new_solution_dict = solution_dict
+
+            for (u,v) in new_solution_dict:
+                if (new_solution_dict[(u,v)]==1):
+                    new_solution_dict[(v,u)]=1
+
+            undirected_solution_dict = {}
+
+            for (u,v) in  new_solution_dict:
+                if u < v :
+                    undirected_solution_dict[(u,v)] = new_solution_dict[(u,v)]
+
+            copy_instance, _ = dict_to_instance(result_dict)
+
+            arc_index_list = [[], []]
+            arc_costs_list = []
+
+            for k, (u,v) in enumerate(copy_instance.arc_list):
+                if u < v:
+                    arc_index_list[0].append(u)
+                    arc_index_list[1].append(v)
+                    arc_costs_list.append(copy_instance.arc_costs[k])
+            
+            arc_index = np.array(arc_index_list)
+            arc_costs = np.array(arc_costs_list)
+            new_instance = CVRP(copy_instance.nodes, arc_index,
+            copy_instance.vehicle_capacity, arc_costs, copy_instance.nb_vehicles)
+
+            # print("length arc_index : ", len(copy_instance.arc_index[0]))
+            # print("length new arc_index : ", len(arc_index[0]))
+            # print("length arc_costs : ", len(copy_instance.arc_costs))
+            # print("length new arc_costs : ", len(arc_costs))
+ 
+            sample = {
+                "instance": new_instance.to_dict(),
+                "solution": undirected_solution_dict,
+                "runtime": result_dict["runtime"],
+                "opt_gap": None,
+                "opt_status": "heuristic HGS",
+            }
+            new_path = f"{new_instance_path}/" + "undirected_" + instance_file 
+            with gzip.open(new_path, "wb") as f:
+                pkl.dump(sample, f)
+
+
+def generate_runtime_plot(best_instance_path, instances_path, reduced_instance_path):
+
+    best_score_dict = {}
+
+    for instance_file in os.listdir(best_instance_path):
+            with gzip.open(os.path.join(best_instance_path, instance_file), "rb") as f:
+                result_dict = pkl.load(f)
+
+            instance, instance_solution  = dict_to_instance(result_dict)
+
+            exact_objective_value = sum(instance_solution[(u,v)] * instance.arc_costs[k]
+                                 for k, (u,v) in 
+                             enumerate(zip(instance.arc_index[0],
+                                            instance.arc_index[1])))
+            print(instance_file, " with exact_objective_value : ", exact_objective_value)
+            m = re.search(r"(\d+)(?=\.pkl\.gz$)", instance_file)
+            extract_key = int(m.group(1))
+            best_score_dict[extract_key] = exact_objective_value
+    print("best_score_dict : ", best_score_dict)
+    HGS_runtime_dict = {5000 : 0}
+
+    for folder in os.listdir(instances_path):
+
+        folder_path = os.path.join(instances_path, folder)
+        m = re.search(r"shorter_(\d+)", folder)
+        extract_name = int(m.group(1))
+
+        best_values_list = []
+        for instance_file in os.listdir(folder_path):
+            with gzip.open(os.path.join(folder_path, instance_file), "rb") as f:
+                result_dict = pkl.load(f)
+
+            m = re.search(r"(\d+)(?=\.pkl\.gz$)", instance_file)
+            extract_key = int(m.group(1))
+            best_values_gap = (result_dict["optimal_value"]- best_score_dict[extract_key])/best_score_dict[extract_key]
+            print("optimal_value : " , result_dict["optimal_value"])
+            print("best gap = ", best_values_gap)
+            best_values_list.append(best_values_gap)
+            
+        HGS_runtime_dict[extract_name] = sum(best_values_list)/len(best_values_list)
+        print(HGS_runtime_dict)
+
+    # reduced_runtime_dict = {k: {} for k in HGS_runtime_dict.keys()}
+    reduced_runtime_dict = {}
+    for folder in os.listdir(reduced_instance_path):
+
+        folder_path = os.path.join(reduced_instance_path, folder)
+        m = re.findall(r"(\d+)", folder)
+        extract_name_1 = int(m[-1])
+        opt_gap_data = get_optgaps_by_method(folder_path)
+
+        for (method, values) in opt_gap_data.items():
+            print("method : ", method)
+            m = re.search(r"(\d+(?:\.\d+)?)$", method)
+            extract_name_2 = float(m.group(1))
+            if extract_name_2 not in reduced_runtime_dict: 
+                reduced_runtime_dict[extract_name_2] = {}
+            reduced_runtime_dict[extract_name_2][extract_name_1] = sum(values) / len(values)
+            # reduced_runtime_dict[extract_name_2][extract_name_1] = sum(values)/len(values)
+            print(float(m.group(1)), " with reduced_value_mean = ", sum(values)/len(values))
+
+    plt.figure(figsize=(10, 6))
+
+    X = sorted(HGS_runtime_dict.keys())
+    y1 = HGS_runtime_dict
+    y_list = reduced_runtime_dict
+
+    y_hgs = [y1[x] for x in X]
+    plt.plot(X, y_hgs, marker="o", linewidth=2.5, label="HGS")
+
+
+    for reduced_key in sorted(y_list.keys()):
+        subdict = y_list[reduced_key]
+
+        # Ensure alignment: missing values become None
+        y_vals = [subdict.get(x, None) for x in X]
+
+        plt.plot(
+            X,
+            y_vals,
+            marker="o",
+            linestyle="--",
+            linewidth=1.8,
+            label=str(reduced_key)
+        )
+
+    plt.xlabel("Runtime")
+    plt.ylabel("Gap Value")
+    plt.title("HGS vs Reduced Methods Runtime Comparison")
+    plt.grid(True, linestyle="--", alpha=0.4)
+    plt.legend(title="Method", fontsize=10)
+
+    plt.tight_layout()
+    plt.show()
+
+
+def generate_exact_plot(best_instance_path, reduced_instance_path):
+
+    best_score_dict = {}
+
+    for instance_file in os.listdir(best_instance_path):
+            with gzip.open(os.path.join(best_instance_path, instance_file), "rb") as f:
+                result_dict = pkl.load(f)
+
+            instance, instance_solution  = dict_to_instance(result_dict)
+
+            exact_objective_value = sum(instance_solution[(u,v)] * instance.arc_costs[k]
+                                 for k, (u,v) in 
+                             enumerate(zip(instance.arc_index[0],
+                                            instance.arc_index[1])))
+            print(instance_file, " with exact_objective_value : ", exact_objective_value)
+            m = re.search(r"(\d+)(?=\.pkl\.gz$)", instance_file)
+            extract_key = int(m.group(1))
+            best_score_dict[extract_key] = exact_objective_value
+    HGS_runtime_dict = {1000 : 0}
+
+    reduced_runtime_dict = {}
+    for folder in os.listdir(reduced_instance_path):
+
+        folder_path = os.path.join(reduced_instance_path, folder)
+        m = re.findall(r"(\d+)", folder)
+        extract_name_1 = int(m[-1])
+        opt_gap_data = get_optgaps_by_method(folder_path)
+        obj_val_data = get_objval_by_method(folder_path)
+        runtime =get_runtimes_by_method(folder_path)
+        print("runtime : ", runtime)
+        print("obj_value : ", obj_val_data)
+
+        for (method, values) in opt_gap_data.items():
+            print("method : ", method)
+            m = re.search(r"(\d+(?:\.\d+)?)$", method)
+            extract_name_2 = float(m.group(1))
+            if extract_name_2 not in reduced_runtime_dict: 
+                reduced_runtime_dict[extract_name_2] = {}
+            reduced_runtime_dict[extract_name_2] = (sum(runtime[method])/len(runtime[method]), sum(values) / len(values))
+            # reduced_runtime_dict[extract_name_2][extract_name_1] = sum(values)/len(values)
+        print("reduced_runtime_dict : ", reduced_runtime_dict)
+
+    plt.figure(figsize=(8,5))
+    for key, (runtime, objective) in reduced_runtime_dict.items():
+         plt.scatter(runtime, objective, label=str(key))
+         plt.text(runtime, objective, f" {key}", fontsize=9, va='center')
+
+    plt.xlabel("Runtime (s)")
+    plt.ylabel("Optimal gap HGS 1000s")
+    plt.title("Optimal gap vs Runtime for each threshold")
+    plt.legend(title="redution coefficient")
+    plt.grid(True)
+    plt.tight_layout() 
+    plt.show()
+    # plt.figure(figsize=(10, 6))
+
+    # X = sorted(HGS_runtime_dict.keys())
+    # y1 = HGS_runtime_dict
+    # y_list = reduced_runtime_dict
+
+    # y_hgs = [y1[x] for x in X]
+    # plt.plot(X, y_hgs, marker="o", linewidth=2.5, label="HGS")
+
+
+    # for reduced_key in sorted(y_list.keys()):
+    #     subdict = y_list[reduced_key]
+
+    #     # Ensure alignment: missing values become None
+    #     y_vals = [subdict.get(x, None) for x in X]
+
+    #     plt.plot(
+    #         X,
+    #         y_vals,
+    #         marker="o",
+    #         linestyle="--",
+    #         linewidth=1.8,
+    #         label=str(reduced_key)
+    #     )
+
+    # plt.xlabel("Runtime")
+    # plt.ylabel("Gap Value")
+    # plt.title("HGS vs Reduced Methods Runtime Comparison")
+    # plt.grid(True, linestyle="--", alpha=0.4)
+    # plt.legend(title="Method", fontsize=10)
+
+    # plt.tight_layout()
+    # plt.show()
+
+
+
 # --- Main: generate a few samples ---
 if __name__ == "__main__":
+
+
     # np.random.seed(3) #first 42, now 4, now 3
     # os.makedirs("data/samples_Munich_100_test_cluster", exist_ok=True)
     # for k in range(1):  
@@ -421,51 +771,59 @@ if __name__ == "__main__":
     #                Munich_inst.arc_costs,
     #                Munich_inst.nb_vehicles,
     #                Munich_inst.vehicle_capacity, connections)
-    chkpnt = torch.load("trained_models_FY_loss_Munich_100/model_gcnn_features_graph_raw_prediction_task_binary_classification_normalization_standard_hidden_layer_dim_20_num_conv_layers_4_num_dense_layers_2/cross_val//fold_4/checkpoint.pth.tar", map_location="cpu")    
+    # chkpnt = torch.load("trained_models_additive_FY_Munich_1000_100/model_gcnn_features_graph_raw_prediction_task_binary_classification_normalization_standard_hidden_layer_dim_20_num_conv_layers_6_num_dense_layers_2/cross_val/fold_0/checkpoint.pth.tar", map_location="cpu")    
 
-    perf = chkpnt["exp_dict"]["performance"]
+    # perf = chkpnt["exp_dict"]["performance"]
 
-    ConfusionMatrixDisplay(confusion_matrix=perf["confusion_matrix"][-1]).plot(cmap="Blues")
-    plt.title("Final Confusion Matrix")
-    plt.show()
+    # # ConfusionMatrixDisplay(confusion_matrix=perf["confusion_matrix"][-1]).plot(cmap="Blues")
+    # # plt.title("Final Confusion Matrix")
+    # # plt.show()
 
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    # fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
-    # --- Loss ---
-    axes[0].plot(perf["train_loss"], label="Training Loss")
-    axes[0].plot(perf["validation_loss"], label="Validation Loss")
-    axes[0].set_title("Loss")
-    axes[0].set_xlabel("Epoch")
-    axes[0].set_ylabel("Loss")
-    axes[0].legend()
-    axes[0].grid(True)
+    # # --- Loss ---
+    # axes[0].plot(perf["train_loss"], label="Training Loss")
+    # axes[0].plot(perf["validation_loss"], label="Validation Loss")
+    # axes[0].set_title("Loss")
+    # axes[0].set_xlabel("Epoch")
+    # axes[0].set_ylabel("Loss")
+    # axes[0].legend()
+    # axes[0].grid(True)
 
-    # --- Accuracy ---
-    axes[1].plot(perf["validation_accuracy"], label="Validation Accuracy", color="green")
-    axes[1].set_title("Accuracy")
-    axes[1].set_xlabel("Epoch")
-    axes[1].set_ylabel("Accuracy")
-    axes[1].legend()
-    axes[1].grid(True)
+    # # --- Accuracy ---
+    # axes[1].plot(perf["validation_accuracy"], label="Validation Accuracy", color="green")
+    # axes[1].set_title("Accuracy")
+    # axes[1].set_xlabel("Epoch")
+    # axes[1].set_ylabel("Accuracy")
+    # axes[1].legend()
+    # axes[1].grid(True)
 
-    # --- Recall / Precision / F-score ---
-    axes[2].plot(perf["validation_recall"], label="Recall", color="orange")
-    axes[2].plot(perf["validation_precision"], label="Precision", color="blue")
-    axes[2].plot(perf["validation_fscore"], label="F-score", color="red")
-    axes[2].set_title("Validation Metrics")
-    axes[2].set_xlabel("Epoch")
-    axes[2].set_ylabel("Score")
-    axes[2].legend()
-    axes[2].grid(True)
+    # # --- Recall / Precision / F-score ---
+    # axes[2].plot(perf["validation_recall"], label="Recall", color="orange")
+    # axes[2].plot(perf["validation_precision"], label="Precision", color="blue")
+    # axes[2].plot(perf["validation_fscore"], label="F-score", color="red")
+    # axes[2].set_title("Validation Metrics")
+    # axes[2].set_xlabel("Epoch")
+    # axes[2].set_ylabel("Score")
+    # axes[2].legend()
+    # axes[2].grid(True)
 
-    plt.tight_layout()
-    plt.show()
+    # plt.tight_layout()
+    # plt.show()
 
 
     # # files = os.listdir("trained_models_Munich_100/model_gcnn_features_graph_raw_prediction_task_binary_classification_normalization_standard_hidden_layer_dim_20_num_conv_layers_6_num_dense_layers_2")
     # # print("Files in directory:", files)
 
-    # generate_benchmark_plot("benchmarking")
+    # generate_benchmark_plot("benchmarking_BCE_loss_Munich_5000_1000_500")
+    # generate_runtime_plot("data/test_samples_Munich_10000_2000_500_50", 
+    #                       "data/shorter_test_samples_Munich_10000_2000_500_50",
+    #                        "runtime_benchmarking_plot")
+
+    generate_exact_plot("data/test_for_exact_samples_1000_100", "exact_benchmark")
+
+    # generate_undirected_solution("data/samples_Munich_1000_100",
+    #                               "data/undirected_samples_Munich_1000_100")
 
     # print("Samples generated in data/samples/")
 
@@ -554,5 +912,71 @@ if __name__ == "__main__":
 
     # if model.solution.is_defined():
     #     print(model.solution)
+
+    # folder_path = "CVRPLIB-main\X\Instances"
+    # solution_folder_path = "CVRPLIB-main\X\Solutions"
+    # os.makedirs("data/X_instances", exist_ok=True)
+    # cvrp_instances = []
+
+    # for filename in os.listdir(folder_path):
+    #     instance_path = os.path.join(folder_path, filename)
+    #     solution_filename = filename.replace(".vrp", ".sol")
+
+
+    #     solution_path = os.path.join(solution_folder_path, solution_filename)
+
+    #     cvrp_instance = parse_cvrp_literatur_instances(instance_path)
+    #     solution_cvrp_instance = parse_solution_file(solution_path)
+
+
+    #     arc_indicator = {} # All arcs in the instance
+    #     sources = cvrp_instance.arc_index[0]
+    #     targets = cvrp_instance.arc_index[1]
+
+    #     for u, v in zip(sources, targets):
+    #         if (u, v) in solution_cvrp_instance:
+    #             arc_indicator[(u, v)] = 1 
+    #         else:
+    #             arc_indicator[(u, v)] = 0
+
+    #     sample = {
+    #         "instance": cvrp_instance.to_dict(),
+    #         "solution": arc_indicator,
+    #         "runtime": 0,
+    #         "opt_gap": None,
+    #         "opt_status": "best_opt",
+    #     }
+    #     save_filename = filename.replace(".vrp", "")
+    #     with gzip.open(f"data/X_instances/" +save_filename +".pkl.gz", "wb") as f:
+    #         pkl.dump(sample, f)
+
+
+
+        # print(f"Number of nodes: {len(cvrp_instance.nodes)}")
+        # print(f"Vehicle capacity: {cvrp_instance.vehicle_capacity}")
+        # print(f"Number of vehicles: {cvrp_instance.nb_vehicles}")
+
+        # Depot is the node with demand 0
+        # depot_nodes = [n.node_id for n in cvrp_instance.nodes if n.demand == 0]
+        # print(f"Depot node(s): {depot_nodes}")
+
+        # Print first few nodes to check parsing
+        # print("\nFirst 5 nodes:")
+        # for n in cvrp_instance.nodes[:5]:
+        #     print(f"  Node {n.node_id}: demand={n.demand}, x={n.x}, y={n.y}")
+
+        # # Arc info
+        # print(f"\nNumber of arcs: {cvrp_instance.arc_index.shape[1]}")
+        # print("First 5 arcs:")
+        # for i in range(5):
+        #     src = cvrp_instance.arc_index[0][i]
+        #     tgt = cvrp_instance.arc_index[1][i]
+        #     cost = cvrp_instance.arc_costs[i]
+        #     print(f"  {src} -> {tgt} : cost={cost}")
+
+        # print("==============================\n")
+
+
+
 
 

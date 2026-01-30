@@ -242,7 +242,12 @@ def get_optgaps_by_method(solution_dir, baseline="exact"):
         for solution_file in files:
             method = os.path.relpath(root, solution_dir)
             with gzip.open(os.path.join(root, solution_file), "rb") as f:
-                result_dict = pkl.load(f)
+                # result_dict = pkl.load(f)
+                try:
+                     result_dict = pkl.load(f)
+                except EOFError:
+                     print("CORRUPTED PICKLE:", root + solution_file) 
+                     continue
             # instance_path = result_dict["instance_path"]
             instance_path = os.path.basename(result_dict["instance_path"])
             if "objective_value" in result_dict:
