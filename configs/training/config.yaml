@@ -30,3 +30,7 @@ use_gpu: False
 seed: 0
 cross_validate: False
 test_split: 0.2
+##changes
+# Lazy loading toggle (memory-saving dataset)
+lazy_loading: False
+#end changes
