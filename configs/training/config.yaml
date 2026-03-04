@@ -34,3 +34,38 @@ test_split: 0.2
 # Lazy loading toggle (memory-saving dataset)
 lazy_loading: False
 #end changes
+
+# =====================
+# Problem definition
+# =====================
+problem:
+  type: cvrp        # [cvrp | cvrptw]
+
+  time_windows:
+    enabled: false  # problem.type == cvrptw ise otomatik true yapılabilir
+    horizon: 1000.0
+    width_min: 150.0
+    width_max: 300.0
+    service_time: 0.0
+    seed: 0
+
+# =====================
+# Sample generation
+# =====================
+sampling:
+  timelimit: 60
+  outputflag: 0
+  nb_clients: 20
+  vehicle_capacity: 30
+  nb_vehicles: 5
+
+paths:
+  out_dir:   "data/samples_Munich"
+
+# =====================
+# Hydra behavior (IMPORTANT)
+# =====================
+hydra:
+  run:
+    dir: .
+  output_subdir: null

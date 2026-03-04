@@ -24,6 +24,7 @@ import gurobipy as gp
 
 ##Changes
 from core.cvrp_solvers.ip_grb import cvrp_subset_connections
+from core.cvrp_solvers.ip_grb import cvrptw_subset_connections
 from core.cvrp_solvers.ip_grb import sol_vals
 from core.cvrp_solvers.heuristics import Clark_Wright_heuristic
 from core.cvrp_solvers.heuristics import heu_solve_HGS_VRP
@@ -580,38 +581,50 @@ def solve_reduced_problem(
 
     status = None
     mip_gap = None
-    if decoder in ["exact"]: 
+    if decoder in ["exact"]:
 
-        # model, x, _ = cvrp_subset_connections(
-        #     instance.demands,
-        #     instance.arc_index,
-        #     instance.arc_costs,
-        #     instance.nb_vehicles,
-        #     instance.vehicle_capacity,
-        #     relevant_connections,
-        #     relax=False,
-        # )
-        # model.setParam("OutputFlag", 1)
-        # if decoder_cfg.get("grb_timeout") is not None:
-        #     model.setParam("TimeLimit", decoder_cfg["grb_timeout"])
-        # if decoder_cfg.get("grb_threads") is not None:
-        #     model.setParam("Threads", decoder_cfg.get("grb_threads"))
-        # model.setParam("Seed", seed)
-        # model.optimize()
-        # if model.status == gp.GRB.OPTIMAL or model.status == gp.GRB.SUBOPTIMAL:
-        #     solution = sol_vals(x)
-        #     print("Optimal objective value with restriction:", model.objVal)
-        # else:
-        #     print("No feasible solution found, status:", model.status)
-        #     solution = {}
-        
-        # runtime = model.Runtime
-        # status = model.Status
-        # mip_gap = model.MIPGap
+        if instance.has_time_windows():
+            # CVRPTW path: solve with time window constraints via Gurobi
+            ready = np.array([n.ready_time for n in instance.nodes])
+            due = np.array([n.due_time for n in instance.nodes])
+            serv = np.array([n.service_time for n in instance.nodes])
 
-        solution, _ = heu_solve_HGS_VRP(instance.demands, instance.arc_index, 
-                      instance.arc_costs, instance.nb_vehicles,
-                        instance.vehicle_capacity, relevant_connections, heu_time=HGS_run_time)
+            model, x, _, _ = cvrptw_subset_connections(
+                instance.demands,
+                instance.arc_index,
+                instance.arc_costs,
+                instance.nb_vehicles,
+                instance.vehicle_capacity,
+                relevant_connections,
+                ready,
+                due,
+                serv,
+                relax=False,
+            )
+            model.setParam("OutputFlag", 0)
+            if decoder_cfg.get("grb_timeout") is not None:
+                model.setParam("TimeLimit", decoder_cfg["grb_timeout"])
+            if decoder_cfg.get("grb_threads") is not None:
+                model.setParam("Threads", decoder_cfg.get("grb_threads"))
+            model.setParam("Seed", seed)
+            model.optimize()
+
+            if model.SolCount > 0:
+                solution = sol_vals(x)
+            else:
+                print("No feasible CVRPTW solution found, status:", model.status)
+                solution = {}
+
+            runtime = model.Runtime
+            status = model.Status
+            mip_gap = model.MIPGap if model.SolCount > 0 else None
+            return solution, runtime, status, mip_gap
+
+        else:
+            # CVRP path: unchanged
+            solution, _ = heu_solve_HGS_VRP(instance.demands, instance.arc_index,
+                          instance.arc_costs, instance.nb_vehicles,
+                            instance.vehicle_capacity, relevant_connections, heu_time=HGS_run_time)
     return solution, 1, status, 0  #solution, runtime, status, mip_gap
 
 def ml_based_cvrp_reduction(

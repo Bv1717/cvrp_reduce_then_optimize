@@ -10,11 +10,14 @@ from pyvrp import Model as HGS_Model
 from pyvrp.stop import MaxRuntime as HGS_MaxRuntime
 import re
 import math
+import hydra
+from omegaconf import DictConfig
 # from typing import List
 
 from core.utils.cvrp import CVRP_node
 from core.utils.cvrp import CVRP
 from core.cvrp_solvers.ip_grb import cvrp
+from core.cvrp_solvers.ip_grb import cvrptw
 from core.cvrp_solvers.ip_grb import sol_vals
 from core.cvrp_solvers.heuristics import Clark_Wright_heuristic
 from core.evaluation.benchmarking_utils import get_mip_gap_by_method
@@ -157,108 +160,300 @@ def generate_subset_cvrp_instances_Munich(path_nodes: str, path_arcs:str, vehicl
     arc_costs = np.array(arc_costs_list)
     return CVRP(nodes, arc_index, vehicle_capacity, arc_costs, nb_vehicles)
 
+#for tw generation
+def assign_time_windows_simple(
+    nodes,
+    horizon=1000.0,
+    width_min=150.0,
+    width_max=300.0,
+    service_time=0.0,
+    seed=0,
+):
+    """
+    Assign synthetic time windows to nodes for CVRPTW.
+
+    Depot gets [0, horizon].
+    Each customer gets [a_i, a_i + width] with width ~ U(width_min, width_max).
+
+    This is a *data generator* helper: the solver must still enforce TW constraints.
+    """
+    rng = np.random.default_rng(seed)
+
+    if width_min <= 0 or width_max < width_min:
+        raise ValueError("Invalid time window width range.")
+
+    # Identify depot (best effort)
+    depot = None
+    for n in nodes:
+        if n.node_id == 0 or n.demand == 0:
+            depot = n
+            break
+
+    if depot is not None:
+        depot.ready_time = 0.0
+        depot.due_time = float(horizon)
+        depot.service_time = float(service_time)
+
+    for n in nodes:
+        if depot is not None and n is depot:
+            continue
+
+        n.service_time = float(service_time)
+
+        w = float(rng.uniform(width_min, width_max))
+        latest = max(0.0, float(horizon) - w)
+        a = float(rng.uniform(0.0, latest))
+        n.ready_time = a
+        n.due_time = a + w
+
+    return nodes
 
 
+# def generate_restricted_cvrp_instances_Munich(path_nodes: str, path_arcs:str, vehicle_capacity = 30, nb_vehicles = 5,
+#                                                      nb_clients = 20):
+#     df_nodes = pd.read_csv(path_nodes)
+#     indices = df_nodes["Index"].to_numpy()
+#     x_coords = df_nodes["X"].to_numpy()
+#     y_coords = df_nodes["Y"].to_numpy()
+#     demands = df_nodes["Demand/Capacity"].to_numpy()
+#     demands = [np.random.randint(1, 10)*(demands[i] != 0) for i in range(len(indices))]
 
-def generate_restricted_cvrp_instances_Munich(path_nodes: str, path_arcs:str, vehicle_capacity = 30, nb_vehicles = 5,
-                                                     nb_clients = 20):
+#     demands = np.array(demands)
+
+#     # plt.figure(figsize=(8, 6))
+
+#     # # Scatter plot, color points by demand
+#     # scatter = plt.scatter(x_coords, y_coords, c=demands, cmap="viridis", s=100, edgecolors="black")
+
+#     # # Annotate each point with its demand
+#     # for i in range(len(x_coords)):
+#     #     plt.annotate(str(demands[i]), (x_coords[i] + 0.05, y_coords[i] + 0.05), fontsize=9)
+
+#     # # Add colorbar to show demand scale
+#     # cbar = plt.colorbar(scatter)
+#     # cbar.set_label("Demand")
+
+#     # plt.title("Node Distribution with Demands")
+#     # plt.xlabel("X Coordinate")
+#     # plt.ylabel("Y Coordinate")
+#     # plt.grid(True)
+#     # plt.show()
+
+#     # Permute numbers 1..nb_clients
+#     random_indices = np.random.permutation(np.arange(1, len(demands)))
+
+#     # Prepend 0
+#     indices = np.concatenate(([0], random_indices[:nb_clients]))
+
+#     nodes = []
+#     for i, idx in enumerate(indices): ##need to verify that only one node has 0 demand == depot
+#         nodes.append(CVRP_node(i, demands[idx], x_coords[idx], y_coords[idx]))
+
+#     df_arcs = pd.read_csv(path_arcs, header = None, names = ["source", "target", "distance"])
+    
+#     source = df_arcs["source"].to_numpy()
+#     target = df_arcs["target"].to_numpy()
+#     distance = df_arcs["distance"].to_numpy()
+#     arc_index_list = [[], []]
+#     arc_costs_list = []
+
+#     for i, src in enumerate(source):
+#         if src != target[i] and src in indices and target[i] in indices:
+#             src_pos = np.where(indices == src)[0][0]
+#             target_pos = np.where(indices == target[i])[0][0]
+#             arc_index_list[0].append(src_pos)
+#             arc_index_list[1].append(target_pos)
+#             arc_costs_list.append(distance[i])
+    
+#     arc_index = np.array(arc_index_list)
+#     arc_costs = np.array(arc_costs_list)
+#     return CVRP(nodes, arc_index, vehicle_capacity, arc_costs, nb_vehicles)
+
+#TW-updated generate_restricted_cvrp_instances_Munich function
+def generate_restricted_cvrp_instances_Munich(
+    path_nodes: str,
+    path_arcs: str,
+    vehicle_capacity=30,
+    nb_vehicles=5,
+    nb_clients=20,
+    # ---- TW flags ----
+    use_time_windows=False,
+    tw_horizon=1000.0,
+    tw_width_min=150.0,
+    tw_width_max=300.0,
+    service_time=0.0,
+    tw_seed=0,
+):
+    """
+    Create a restricted sub-instance from Munich data (CVRP/CVRPTW).
+
+    Important: This function re-indexes selected nodes into a contiguous 0..nb_clients space,
+    and filters arcs accordingly. If use_time_windows=True, assigns TW fields to nodes.
+
+    Returns
+    -------
+    CVRP (actually CVRPTW-ready CVRP object with TW fields in nodes)
+    """
     df_nodes = pd.read_csv(path_nodes)
-    indices = df_nodes["Index"].to_numpy()
+
+    # Original node table columns
+    indices_all = df_nodes["Index"].to_numpy()
     x_coords = df_nodes["X"].to_numpy()
     y_coords = df_nodes["Y"].to_numpy()
-    demands = df_nodes["Demand/Capacity"].to_numpy()
-    demands = [np.random.randint(1, 10)*(demands[i] != 0) for i in range(len(indices))]
+    demands_raw = df_nodes["Demand/Capacity"].to_numpy()
 
-    demands = np.array(demands)
+    # Keep your original behavior: depot row demand stays 0, others random 1..9
+    demands_all = np.array(
+        [np.random.randint(1, 10) * (demands_raw[i] != 0) for i in range(len(indices_all))],
+        dtype=float,
+    )
 
-    # plt.figure(figsize=(8, 6))
+    # Pick a subset: keep original id 0 as depot-candidate, plus nb_clients customers
+    random_indices = np.random.permutation(np.arange(1, len(demands_all)))  # exclude 0
+    selected_original_ids = np.concatenate(([0], random_indices[:nb_clients]))
 
-    # # Scatter plot, color points by demand
-    # scatter = plt.scatter(x_coords, y_coords, c=demands, cmap="viridis", s=100, edgecolors="black")
-
-    # # Annotate each point with its demand
-    # for i in range(len(x_coords)):
-    #     plt.annotate(str(demands[i]), (x_coords[i] + 0.05, y_coords[i] + 0.05), fontsize=9)
-
-    # # Add colorbar to show demand scale
-    # cbar = plt.colorbar(scatter)
-    # cbar.set_label("Demand")
-
-    # plt.title("Node Distribution with Demands")
-    # plt.xlabel("X Coordinate")
-    # plt.ylabel("Y Coordinate")
-    # plt.grid(True)
-    # plt.show()
-
-    # Permute numbers 1..nb_clients
-    random_indices = np.random.permutation(np.arange(1, len(demands)))
-
-    # Prepend 0
-    indices = np.concatenate(([0], random_indices[:nb_clients]))
-
+    # Build nodes with NEW contiguous IDs 0..nb_clients
     nodes = []
-    for i, idx in enumerate(indices): ##need to verify that only one node has 0 demand == depot
-        nodes.append(CVRP_node(i, demands[idx], x_coords[idx], y_coords[idx]))
+    for new_id, orig_id in enumerate(selected_original_ids):
+        nodes.append(
+            CVRP_node(
+                node_id=int(new_id),
+                demand=float(demands_all[int(orig_id)]),
+                x=float(x_coords[int(orig_id)]),
+                y=float(y_coords[int(orig_id)]),
+            )
+        )
 
-    df_arcs = pd.read_csv(path_arcs, header = None, names = ["source", "target", "distance"])
-    
+    # Map original node ids -> new contiguous ids
+    orig_to_new = {int(orig): int(new) for new, orig in enumerate(selected_original_ids)}
+
+    # Load arcs (source,target,distance)
+    df_arcs = pd.read_csv(path_arcs, header=None, names=["source", "target", "distance"])
     source = df_arcs["source"].to_numpy()
     target = df_arcs["target"].to_numpy()
     distance = df_arcs["distance"].to_numpy()
+
     arc_index_list = [[], []]
     arc_costs_list = []
 
     for i, src in enumerate(source):
-        if src != target[i] and src in indices and target[i] in indices:
-            src_pos = np.where(indices == src)[0][0]
-            target_pos = np.where(indices == target[i])[0][0]
-            arc_index_list[0].append(src_pos)
-            arc_index_list[1].append(target_pos)
-            arc_costs_list.append(distance[i])
-    
-    arc_index = np.array(arc_index_list)
-    arc_costs = np.array(arc_costs_list)
-    return CVRP(nodes, arc_index, vehicle_capacity, arc_costs, nb_vehicles)
+        dst = target[i]
+        if int(src) == int(dst):
+            continue
+        if int(src) in orig_to_new and int(dst) in orig_to_new:
+            arc_index_list[0].append(orig_to_new[int(src)])
+            arc_index_list[1].append(orig_to_new[int(dst)])
+            arc_costs_list.append(float(distance[i]))
+
+    arc_index = np.array(arc_index_list, dtype=int)
+    arc_costs = np.array(arc_costs_list, dtype=float)
+
+    inst = CVRP(nodes, arc_index, vehicle_capacity, arc_costs, nb_vehicles)
+
+    # Assign TW fields if requested
+    if use_time_windows:
+        assign_time_windows_simple(
+            inst.nodes,
+            horizon=tw_horizon,
+            width_min=tw_width_min,
+            width_max=tw_width_max,
+            service_time=service_time,
+            seed=tw_seed,
+        )
+
+    return inst
 
 
 
 
 
-def save_sample(instance: CVRP, path: str):
-    # Solve instance to get solution
-    demands = np.array([node.demand for node in instance.nodes])
-    model, x, _ = cvrp(demands,
-                   instance.arc_index,
-                   instance.arc_costs,
-                   instance.nb_vehicles,
-                   instance.vehicle_capacity)
-    model.setParam("OutputFlag", 1)  ##replace 0 by 1 to see the outputflag
-    model.setParam("TimeLimit", 10)
+# def save_sample(instance: CVRP, path: str):
+#     # Solve instance to get solution
+#     demands = np.array([node.demand for node in instance.nodes])
+#     model, x, _ = cvrp(demands,
+#                    instance.arc_index,
+#                    instance.arc_costs,
+#                    instance.nb_vehicles,
+#                    instance.vehicle_capacity)
+#     model.setParam("OutputFlag", 1)  ##replace 0 by 1 to see the outputflag
+#     model.setParam("TimeLimit", 10)
+#     model.optimize()
+
+
+#     if model.status == gp.GRB.OPTIMAL or model.status == gp.GRB.SUBOPTIMAL or model.SolCount > 0:
+#         print("Optimal objective value:", model.objVal)
+#         # for k, var in x.items():
+#         #     if var.X > 0.5:  # chosen arcs
+#         #         print(f"Arc {k} is used, cost {var.Obj}")
+#         sol = sol_vals(x)
+#     elif model.status == gp.GRB.INFEASIBLE:
+#         model.computeIIS()
+#         model.write("model.ilp") 
+#         sol = None
+#         print("No feasible solution found, status:", model.status)
+
+
+#     sample = {
+#         "instance": instance.to_dict(),
+#         "solution": sol,
+#         "runtime": model.Runtime,
+#         "opt_gap": model.MIPGap,
+#         "opt_status": model.Status,
+#     }
+#     with gzip.open(path, "wb") as f:
+#         pkl.dump(sample, f)
+
+#TW-updated save_sample function
+def save_sample(instance: CVRP, path: str, cfg: DictConfig):
+
+    demands = np.array([n.demand for n in instance.nodes], dtype=float)
+
+    if cfg.problem.type == "cvrp":
+        model, x, _ = cvrp(
+            demands,
+            instance.arc_index,
+            instance.arc_costs,
+            cfg.sampling.nb_vehicles,
+            cfg.sampling.vehicle_capacity,
+        )
+
+    elif cfg.problem.type == "cvrptw":
+        ready = np.array([n.ready_time for n in instance.nodes])
+        due = np.array([n.due_time for n in instance.nodes])
+        service = np.array([n.service_time for n in instance.nodes])
+
+        model, x, _, _ = cvrptw(
+            demands,
+            instance.arc_index,
+            instance.arc_costs,
+            cfg.sampling.nb_vehicles,
+            cfg.sampling.vehicle_capacity,
+            ready,
+            due,
+            service,
+        )
+
+    else:
+        raise ValueError(f"Unknown problem type: {cfg.problem.type}")
+
+    model.setParam("OutputFlag", cfg.sampling.outputflag)
+    model.setParam("TimeLimit", cfg.sampling.timelimit)
     model.optimize()
 
-
-    if model.status == gp.GRB.OPTIMAL or model.status == gp.GRB.SUBOPTIMAL or model.SolCount > 0:
-        print("Optimal objective value:", model.objVal)
-        # for k, var in x.items():
-        #     if var.X > 0.5:  # chosen arcs
-        #         print(f"Arc {k} is used, cost {var.Obj}")
-        sol = sol_vals(x)
-    elif model.status == gp.GRB.INFEASIBLE:
-        model.computeIIS()
-        model.write("model.ilp") 
-        sol = None
-        print("No feasible solution found, status:", model.status)
-
+    sol = sol_vals(x) if model.SolCount > 0 else None
 
     sample = {
         "instance": instance.to_dict(),
         "solution": sol,
         "runtime": model.Runtime,
-        "opt_gap": model.MIPGap,
+        "opt_gap": getattr(model, "MIPGap", None),
         "opt_status": model.Status,
     }
+
     with gzip.open(path, "wb") as f:
         pkl.dump(sample, f)
+
+
 
 def test_Clark_heuristic(instance):
     # demands = np.array([node.demand for node in instance.nodes])
@@ -509,30 +704,68 @@ def parse_solution_file(path, depot=0):
 
 
 # --- Main: generate a few samples ---
-if __name__ == "__main__":
+
+import hydra
+from omegaconf import DictConfig, OmegaConf
+
+@hydra.main(version_base=None, config_path="configs/training", config_name="config")
+def main(cfg: DictConfig):
+    out_dir = OmegaConf.select(cfg, "paths.out_dir") or "data/samples_out"
+    os.makedirs(out_dir, exist_ok=True)
+
+    checkpoint_path = (
+        OmegaConf.select(cfg, "debug.checkpoint_path")
+        or "trained_models_X_instances_mix_Munich_1000_100/"
+           "model_gcnn_features_graph_raw_prediction_task_binary_classification_"
+           "normalization_standard_hidden_layer_dim_20_num_conv_layers_6_num_dense_layers_2/"
+           "cross_val/fold_0/checkpoint.pth.tar"
+    )
+
+    problem_type = (OmegaConf.select(cfg, "problem.type") or "cvrp").lower()
+
+    # NEW: how many samples?
+    num_samples = int(OmegaConf.select(cfg, "num_samples") or 1)
 
 
-    # np.random.seed(3) #first 42, now 4, now 3
-    # os.makedirs("data/samples_Munich_100_test_cluster", exist_ok=True)
-    # for k in range(1):  
-    #     # rd_num_nodes = np.random.randint(30, 50)
-    #     # print("rd_num_nodes = ", rd_num_nodes)
-    #     # inst = generate_cvrp_instance(rd_num_nodes, 30, rd_num_nodes)
-    #     Munich_inst = generate_restricted_cvrp_instances_Munich(
-    #     "interlog_gen-master/resources/instances/100_0_1/all_w_geom.csv",
-    #     "interlog_gen-master/resources/instances/100_0_1/dm_drive.csv", nb_clients= 20)
-    #     # save_sample(Munich_inst, f"data/samples_Munich/sample_20_0_1_Munich{k}.pkl.gz")
-    #     # test_Clark_heuristic(inst)
-    #     # solve_HGS_VRP_test_cluster(Munich_inst, f"data/samples_Munich_100_test_cluster/sample_100_0_1_Munich{k}.pkl.gz")
-    #     connections = [True]*len(Munich_inst.arc_costs)
-    #     arc_cost_neg = [-np.random.randint(30, 50) for i in range(len(Munich_inst.arc_costs))]
-    #     cvrp_via_VRP_Easy(Munich_inst.demands,
-    #                Munich_inst.arc_index,
-    #                Munich_inst.arc_costs,
-    #                Munich_inst.nb_vehicles,
-    #                Munich_inst.vehicle_capacity, connections)
-    chkpnt = torch.load("trained_models_X_instances_mix_Munich_1000_100/model_gcnn_features_graph_raw_prediction_task_binary_classification_normalization_standard_hidden_layer_dim_20_num_conv_layers_6_num_dense_layers_2/cross_val/fold_0/checkpoint.pth.tar", map_location="cpu")    
+    for k in range(num_samples):
+        out_path = os.path.join(out_dir, f"sample_{k}.pkl.gz")
 
+        # deterministic per-sample RNG (so CVRP and CVRPTW runs match with same seed)
+        base_seed = int(OmegaConf.select(cfg, "seed") or 0)
+        np.random.seed(base_seed + k)
+
+        # -----------------------------
+        # Generate instance
+        # -----------------------------
+        instance = generate_cvrp_instance(
+            num_nodes=cfg.sampling.nb_clients + 1,  # depot + clients
+            vehicle_capacity=cfg.sampling.vehicle_capacity,
+            nb_vehicles=cfg.sampling.nb_vehicles,
+        )
+
+        # add TW only if cvrptw
+        if problem_type == "cvrptw":
+            tw_seed = int(cfg.problem.time_windows.seed) + k
+            assign_time_windows_simple(
+                instance.nodes,
+                horizon=cfg.problem.time_windows.horizon,
+                width_min=cfg.problem.time_windows.width_min,
+                width_max=cfg.problem.time_windows.width_max,
+                service_time=cfg.problem.time_windows.service_time,
+                seed=tw_seed,
+            )
+        elif problem_type != "cvrp":
+            raise ValueError(f"Unknown problem type: {cfg.problem.type}")
+
+        save_sample(instance=instance, path=out_path, cfg=cfg)
+        print(f"[OK] Sample saved to: {out_path}")
+
+    # ----- plotting part unchanged -----
+    if not os.path.exists(checkpoint_path):
+        print(f"[WARN] Checkpoint not found, skipping plots:\n  {checkpoint_path}")
+        return
+
+    chkpnt = torch.load(checkpoint_path, map_location="cpu")
     perf = chkpnt["exp_dict"]["performance"]
 
     ConfusionMatrixDisplay(confusion_matrix=perf["confusion_matrix"][-1]).plot(cmap="Blues")
@@ -540,8 +773,6 @@ if __name__ == "__main__":
     plt.show()
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-
-    # --- Loss ---
     axes[0].plot(perf["train_loss"], label="Training Loss")
     axes[0].plot(perf["validation_loss"], label="Validation Loss")
     axes[0].set_title("Loss")
@@ -550,7 +781,6 @@ if __name__ == "__main__":
     axes[0].legend()
     axes[0].grid(True)
 
-    # --- Accuracy ---
     axes[1].plot(perf["validation_accuracy"], label="Validation Accuracy", color="green")
     axes[1].set_title("Accuracy")
     axes[1].set_xlabel("Epoch")
@@ -558,7 +788,6 @@ if __name__ == "__main__":
     axes[1].legend()
     axes[1].grid(True)
 
-    # --- Recall / Precision / F-score ---
     axes[2].plot(perf["validation_recall"], label="Recall", color="orange")
     axes[2].plot(perf["validation_precision"], label="Precision", color="blue")
     axes[2].plot(perf["validation_fscore"], label="F-score", color="red")
@@ -570,6 +799,71 @@ if __name__ == "__main__":
 
     plt.tight_layout()
     plt.show()
+
+
+if __name__ == "__main__":
+    main()
+
+
+
+#     # np.random.seed(3) #first 42, now 4, now 3
+#     # os.makedirs("data/samples_Munich_100_test_cluster", exist_ok=True)
+#     # for k in range(1):  
+#     #     # rd_num_nodes = np.random.randint(30, 50)
+#     #     # print("rd_num_nodes = ", rd_num_nodes)
+#     #     # inst = generate_cvrp_instance(rd_num_nodes, 30, rd_num_nodes)
+#     #     Munich_inst = generate_restricted_cvrp_instances_Munich(
+#     #     "interlog_gen-master/resources/instances/100_0_1/all_w_geom.csv",
+#     #     "interlog_gen-master/resources/instances/100_0_1/dm_drive.csv", nb_clients= 20)
+#     #     # save_sample(Munich_inst, f"data/samples_Munich/sample_20_0_1_Munich{k}.pkl.gz")
+#     #     # test_Clark_heuristic(inst)
+#     #     # solve_HGS_VRP_test_cluster(Munich_inst, f"data/samples_Munich_100_test_cluster/sample_100_0_1_Munich{k}.pkl.gz")
+#     #     connections = [True]*len(Munich_inst.arc_costs)
+#     #     arc_cost_neg = [-np.random.randint(30, 50) for i in range(len(Munich_inst.arc_costs))]
+#     #     cvrp_via_VRP_Easy(Munich_inst.demands,
+#     #                Munich_inst.arc_index,
+#     #                Munich_inst.arc_costs,
+#     #                Munich_inst.nb_vehicles,
+#     #                Munich_inst.vehicle_capacity, connections)
+#     chkpnt = torch.load("trained_models_X_instances_mix_Munich_1000_100/model_gcnn_features_graph_raw_prediction_task_binary_classification_normalization_standard_hidden_layer_dim_20_num_conv_layers_6_num_dense_layers_2/cross_val/fold_0/checkpoint.pth.tar", map_location="cpu")    
+
+#     perf = chkpnt["exp_dict"]["performance"]
+
+#     ConfusionMatrixDisplay(confusion_matrix=perf["confusion_matrix"][-1]).plot(cmap="Blues")
+#     plt.title("Final Confusion Matrix")
+#     plt.show()
+
+#     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+#     # --- Loss ---
+#     axes[0].plot(perf["train_loss"], label="Training Loss")
+#     axes[0].plot(perf["validation_loss"], label="Validation Loss")
+#     axes[0].set_title("Loss")
+#     axes[0].set_xlabel("Epoch")
+#     axes[0].set_ylabel("Loss")
+#     axes[0].legend()
+#     axes[0].grid(True)
+
+#     # --- Accuracy ---
+#     axes[1].plot(perf["validation_accuracy"], label="Validation Accuracy", color="green")
+#     axes[1].set_title("Accuracy")
+#     axes[1].set_xlabel("Epoch")
+#     axes[1].set_ylabel("Accuracy")
+#     axes[1].legend()
+#     axes[1].grid(True)
+
+#     # --- Recall / Precision / F-score ---
+#     axes[2].plot(perf["validation_recall"], label="Recall", color="orange")
+#     axes[2].plot(perf["validation_precision"], label="Precision", color="blue")
+#     axes[2].plot(perf["validation_fscore"], label="F-score", color="red")
+#     axes[2].set_title("Validation Metrics")
+#     axes[2].set_xlabel("Epoch")
+#     axes[2].set_ylabel("Score")
+#     axes[2].legend()
+#     axes[2].grid(True)
+
+#     plt.tight_layout()
+#     plt.show()
 
 
     # # files = os.listdir("trained_models_Munich_100/model_gcnn_features_graph_raw_prediction_task_binary_classification_normalization_standard_hidden_layer_dim_20_num_conv_layers_6_num_dense_layers_2")
@@ -727,8 +1021,3 @@ if __name__ == "__main__":
         #     print(f"  {src} -> {tgt} : cost={cost}")
 
         # print("==============================\n")
-
-
-
-
-

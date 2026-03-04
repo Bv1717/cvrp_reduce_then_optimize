@@ -1365,41 +1365,77 @@ def multiclass_classification_eval_display_func(p, include_train=True):
 
 ## Changes
 
+# def get_graph_raw_features_for_instance(instance, batch_dim=True):
+#     """Translate instance into feature arrays for GNN.
+
+#     Features:
+#     - nodes : demands
+#     - arcs: costs
+#     - arc_index : 2D np.array 
+
+#     Parameters
+#     ----------
+#     instance: object
+#         Instance object with .nodes, .arc_costs and .arc_index attributes.
+#     batch_dim: bool, optional
+#         Indicate whether batch dimension should be added.
+
+#     Returns
+#     -------
+#     tuple
+#         3-element tuple containing node features, arc features and arc_index.
+
+#     """
+
+#     # print("instance : ", instance)
+#     x_nodes = np.array([node.demand for node in instance.nodes])[:, None] 
+#     x_a = np.array(instance.arc_costs)[:, None]
+#     arc_index = np.array(instance.arc_index)
+#     nb_vehicles = instance.nb_vehicles
+#     vehicle_capacity = instance.vehicle_capacity
+
+#     # if batch_dim:
+#     #     x_nodes = x_nodes[None, :, :] #1xnx1 shape
+#     #     x_a = x_a[None, :, :] #1xmx1 shape
+#     #     # arc_index = arc_index[None, :, :]  # shape (1, 2, m)
+
+#     return (x_nodes, x_a, arc_index, nb_vehicles, vehicle_capacity)
+
+
+# TW Aware get_graph_raw_features_for_instance function
 def get_graph_raw_features_for_instance(instance, batch_dim=True):
-    """Translate instance into feature arrays for GNN.
-
-    Features:
-    - nodes : demands
-    - arcs: costs
-    - arc_index : 2D np.array 
-
-    Parameters
-    ----------
-    instance: object
-        Instance object with .nodes, .arc_costs and .arc_index attributes.
-    batch_dim: bool, optional
-        Indicate whether batch dimension should be added.
-
-    Returns
-    -------
-    tuple
-        3-element tuple containing node features, arc features and arc_index.
-
-    """
-
-    # print("instance : ", instance)
-    x_nodes = np.array([node.demand for node in instance.nodes])[:, None] 
-    x_a = np.array(instance.arc_costs)[:, None]
+    nodes = instance.nodes
     arc_index = np.array(instance.arc_index)
+    arc_costs = np.array(instance.arc_costs, dtype=np.float32)
+
+    # --- node features ---
+    demands = np.array([n.demand for n in nodes], dtype=np.float32)
+
+    # safe getters: CVRP instance'larda None olabilir
+    ready = np.array([0.0 if getattr(n, "ready_time", None) is None else float(n.ready_time) for n in nodes], dtype=np.float32)
+    due   = np.array([0.0 if getattr(n, "due_time", None)   is None else float(n.due_time)   for n in nodes], dtype=np.float32)
+    serv  = np.array([0.0 if getattr(n, "service_time", None) is None else float(n.service_time) for n in nodes], dtype=np.float32)
+
+    # x_nodes: (N, F)  -> demand + TW(ready,due,service)
+    x_nodes = np.stack([demands, ready, due, serv], axis=1)  # (N, 4)
+
+    # --- edge features ---
+    # base edge feature: cost
+    x_a_list = [arc_costs]  # (E,)
+
+    # slack_ij = due_j - (ready_i + service_i + travel_ij)
+    i = arc_index[0]
+    j = arc_index[1]
+    slack = due[j] - (ready[i] + serv[i] + arc_costs)
+    slack = np.clip(slack, -1e3, 1e3).astype(np.float32)
+
+    x_a = np.stack([arc_costs, slack], axis=1)  # (E, 2)
+
     nb_vehicles = instance.nb_vehicles
     vehicle_capacity = instance.vehicle_capacity
 
-    # if batch_dim:
-    #     x_nodes = x_nodes[None, :, :] #1xnx1 shape
-    #     x_a = x_a[None, :, :] #1xmx1 shape
-    #     # arc_index = arc_index[None, :, :]  # shape (1, 2, m)
-
     return (x_nodes, x_a, arc_index, nb_vehicles, vehicle_capacity)
+
 
 def get_graph_raw_features(
     sample_paths,
@@ -1576,7 +1612,9 @@ class CVRPData(Dataset):
         y = torch.tensor(self.y[index], dtype=torch.float)
         nb_vehicles = torch.tensor(self.nb_vehicles[index], dtype=torch.float)
         vehicle_capacity = torch.tensor(self.vehicle_capacity[index], dtype = torch.float)
-        demands_list = torch.tensor(self.x_nodes[index], dtype=torch.int )
+        # demands_list = torch.tensor(self.x_nodes[index], dtype=torch.int )
+        demands_list = torch.tensor(self.x_nodes[index][:, 0], dtype=torch.int64)
+
 
         # Build PyG Data object
         data = Data(
@@ -1629,7 +1667,10 @@ class LazyCVRPData(Dataset):
 
         nb_vehicles = torch.tensor(nb_vehicles, dtype=torch.float32)
         vehicle_capacity = torch.tensor(capacity_vehicle, dtype=torch.float32)
-        demands_list = torch.tensor(x_no, dtype=torch.int64)
+        
+        # demands_list = torch.tensor(x_no, dtype=torch.int64)
+        demands_list = torch.tensor(x_no[:, 0], dtype=torch.int64)
+
 
         # Binary arc labels (E x 1)
         sol = sol_to_list(sample["solution"], sample["instance"].arc_lookup)

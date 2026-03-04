@@ -716,6 +716,177 @@ def cvrp(demands, arc_index, arc_costs, nb_vehicles, vehicle_capacity, sol_dict 
 
     return m, x, u
 
+def cvrptw(
+    demands,
+    arc_index,
+    arc_costs,
+    nb_vehicles,
+    vehicle_capacity,
+    ready_time,
+    due_time,
+    service_time,
+    sol_dict=None,
+):
+    """Generate Gurobi model for the CVRPTW (CVRP with time windows).
+
+    Parameters
+    ----------
+    demands: 1D np.array or list
+        Customer demands. A zero demand corresponds to the depot.
+    arc_index : 2D np.array
+        List of arcs with source and destination
+    arc_costs: 1D np.array
+        Cost / travel-time proxy for using the kth arc.
+    nb_vehicles: int
+        Number of vehicles.
+    vehicle_capacity : int or float
+        Uniform capacity for the vehicles.
+    ready_time : 1D np.array
+        Earliest service start time a_i for each node i.
+    due_time : 1D np.array
+        Latest service start time b_i for each node i.
+    service_time : 1D np.array
+        Service duration s_i for each node i.
+    sol_dict : dict, optional
+        Warm-start solution for x.
+
+    Returns
+    -------
+    m: gp.Model
+        Gurobi model.
+    x: dict
+        Arc activation variables x[i,j] in {0,1}.
+    u: dict
+        MTZ capacity variables.
+    t: dict
+        Service start time variables.
+    """
+
+    m = gp.Model()
+
+    arc_list = [(int(src), int(dst)) for src, dst in zip(arc_index[0], arc_index[1])]
+
+    cost_dict = {
+        (int(src), int(dst)): arc_costs[k]
+        for k, (src, dst) in enumerate(zip(arc_index[0], arc_index[1]))
+    }
+
+    # x[i,j] = 1 if arc (i,j) is used
+    x = m.addVars(arc_list, obj=cost_dict, vtype=gp.GRB.BINARY, name="x")
+
+    # Optional warm start
+    if sol_dict is not None:
+        for arc, value in sol_dict.items():
+            if arc in x:
+                x[arc].start = value
+
+    # MTZ capacity variables (same as CVRP)
+    u = m.addVars(len(demands), vtype=gp.GRB.CONTINUOUS, name="u")
+
+    # CHANGE (TW): service start time variables
+    t = m.addVars(len(demands), vtype=gp.GRB.CONTINUOUS, name="t")
+
+    # -----------------------------
+    # MTZ capacity constraints
+    # -----------------------------
+    for i, demand_i in enumerate(demands):
+        for j, demand_j in enumerate(demands):
+            if i != j and demand_i > 0 and demand_j > 0 and (i, j) in arc_list:
+                m.addConstr(
+                    u[j] - u[i] >= demand_j - vehicle_capacity * (1 - x[i, j]),
+                    name=f"MTZ1_{i}_{j}",
+                )
+
+    for j, demand_j in enumerate(demands):
+        if demand_j > 0:
+            m.addConstr(u[j] >= demand_j, name=f"MTZ2_lb{j}")
+            m.addConstr(u[j] <= vehicle_capacity, name=f"MTZ2_ub{j}")
+
+    # -----------------------------
+    # Vehicle count at depot
+    # -----------------------------
+    depot_idx = None
+    for i, demand in enumerate(demands):
+        if demand == 0:
+            m.addConstr(
+                gp.quicksum(
+                    x[i, j]
+                    for j in range(len(demands))
+                    if (i, j) in x and i != j
+                )
+                <= nb_vehicles,
+                name=f"CV{i}",
+            )
+            depot_idx = i
+            break
+
+    if depot_idx is None:
+        raise ValueError("No depot found (expected a node with demand == 0).")
+
+    # -----------------------------
+    # Degree constraints (same)
+    # -----------------------------
+    for i, demand in enumerate(demands):
+        if demand > 0:
+            m.addConstr(
+                gp.quicksum(
+                    x[i, j]
+                    for j in range(len(demands))
+                    if (i, j) in x and i != j
+                )
+                == 1,
+                name=f"LC{i}",
+            )
+
+    for j, demand in enumerate(demands):
+        if demand > 0:
+            m.addConstr(
+                gp.quicksum(
+                    x[i, j]
+                    for i in range(len(demands))
+                    if (i, j) in x and i != j
+                )
+                == 1,
+                name=f"SC{j}",
+            )
+
+    # -----------------------------
+    # CHANGE (TW): Time window bounds  (your (5))
+    # ready_i <= t[i] <= due_i
+    # -----------------------------
+    for i in range(len(demands)):
+        # allow depot too (often [0, horizon])
+        m.addConstr(t[i] >= float(ready_time[i]), name=f"TW_lb{i}")
+        m.addConstr(t[i] <= float(due_time[i]), name=f"TW_ub{i}")
+
+    # Fix depot time to 0:
+    m.addConstr(t[depot_idx] == float(ready_time[depot_idx]), name="DepotTimeFix")
+
+    # -----------------------------
+    # CHANGE (TW): Time propagation  (your (6))
+    # t[j] >= t[i] + service_i + travel_ij - M*(1-x[i,j])
+    # -----------------------------
+    # A safe global Big-M:
+    # when x=0, constraint should not bind even at extremes.
+    max_due = float(max(due_time))
+    max_service = float(max(service_time))
+    max_travel = float(max(arc_costs)) if len(arc_costs) > 0 else 0.0
+    M = max_due + max_service + max_travel
+
+    for (i, j) in arc_list:
+        if i == j:
+            continue
+        if j == depot_idx:
+            continue
+        travel_ij = float(cost_dict[(i, j)])
+        m.addConstr(
+            t[j] >= t[i] + float(service_time[i]) + travel_ij - M * (1 - x[i, j]),
+            name=f"TWprop_{i}_{j}",
+        )
+
+    return m, x, u, t
+
+
 
 def cvrp_subset_connections(demands, arc_index, arc_costs, nb_vehicles,
                             vehicle_capacity, connections, relax = False):
@@ -812,6 +983,171 @@ def cvrp_subset_connections(demands, arc_index, arc_costs, nb_vehicles,
             )
 
     return m, x, u
+
+
+def cvrptw_subset_connections(
+    demands,
+    arc_index,
+    arc_costs,
+    nb_vehicles,
+    vehicle_capacity,
+    connections,
+    ready_time,
+    due_time,
+    service_time,
+    relax=False,
+):
+    """Generate Gurobi model for the CVRPTW with a subset of arcs.
+
+    Combines arc filtering from cvrp_subset_connections with time window
+    constraints from cvrptw.
+
+    Parameters
+    ----------
+    demands : 1D np.array or list
+        Customer demands. A zero demand corresponds to the depot.
+    arc_index : 2D np.array
+        List of arcs with source and destination.
+    arc_costs : 1D np.array
+        Cost for using each arc.
+    nb_vehicles : int
+        Number of vehicles.
+    vehicle_capacity : int or float
+        Uniform capacity for the vehicles.
+    connections : 1D np.array
+        Binary list indicating whether each arc should be included.
+    ready_time : 1D np.array
+        Earliest service start time a_i for each node i.
+    due_time : 1D np.array
+        Latest service start time b_i for each node i.
+    service_time : 1D np.array
+        Service duration s_i for each node i.
+    relax : bool, optional
+        Whether to relax binary variables to continuous. Default is False.
+
+    Returns
+    -------
+    m : gp.Model
+        Gurobi model.
+    x : dict
+        Arc activation variables.
+    u : dict
+        MTZ capacity variables.
+    t : dict
+        Service start time variables.
+    """
+
+    m = gp.Model()
+
+    # Filter arcs by connections mask
+    cost_dict = {
+        (int(src), int(dst)): arc_costs[k]
+        for k, (src, dst) in enumerate(zip(arc_index[0], arc_index[1]))
+        if connections[k]
+    }
+
+    arc_list = [
+        (int(i), int(j))
+        for idx, (i, j) in enumerate(zip(arc_index[0], arc_index[1]))
+        if connections[idx]
+    ]
+
+    # Arc activation variables
+    if relax:
+        x = m.addVars(arc_list, obj=cost_dict, vtype=gp.GRB.CONTINUOUS, name="x")
+    else:
+        x = m.addVars(arc_list, obj=cost_dict, vtype=gp.GRB.BINARY, name="x")
+
+    # MTZ capacity variables
+    u = m.addVars(len(demands), vtype=gp.GRB.CONTINUOUS, name="u")
+
+    # Time variables
+    t = m.addVars(len(demands), vtype=gp.GRB.CONTINUOUS, name="t")
+
+    # MTZ capacity constraints
+    for i, demand_i in enumerate(demands):
+        for j, demand_j in enumerate(demands):
+            if i != j and demand_i > 0 and demand_j > 0 and (i, j) in x:
+                m.addConstr(
+                    u[j] - u[i] >= demand_j - vehicle_capacity * (1 - x[i, j]),
+                    name=f"MTZ1{i, j}",
+                )
+
+    for j, demand_j in enumerate(demands):
+        if demand_j > 0:
+            m.addConstr(u[j] >= demand_j, name=f"MTZ2_lb{j}")
+            m.addConstr(u[j] <= vehicle_capacity, name=f"MTZ2_ub{j}")
+
+    # Vehicle count at depot
+    depot_idx = None
+    for i, demand in enumerate(demands):
+        if demand == 0:
+            m.addConstr(
+                gp.quicksum(
+                    x[i, j]
+                    for j in range(len(demands))
+                    if (i, j) in x and i != j
+                )
+                <= nb_vehicles,
+                name=f"CV{i}",
+            )
+            depot_idx = i
+            break
+
+    if depot_idx is None:
+        raise ValueError("No depot found (expected a node with demand == 0).")
+
+    # Degree constraints
+    for i, demand in enumerate(demands):
+        if demand > 0:
+            m.addConstr(
+                gp.quicksum(
+                    x[i, j]
+                    for j in range(len(demands))
+                    if (i, j) in x and i != j
+                )
+                == 1,
+                name=f"LC{i}",
+            )
+
+    for j, demand in enumerate(demands):
+        if demand > 0:
+            m.addConstr(
+                gp.quicksum(
+                    x[i, j]
+                    for i in range(len(demands))
+                    if (i, j) in x and i != j
+                )
+                == 1,
+                name=f"SC{j}",
+            )
+
+    # Time window bounds
+    for i in range(len(demands)):
+        m.addConstr(t[i] >= float(ready_time[i]), name=f"TW_lb{i}")
+        m.addConstr(t[i] <= float(due_time[i]), name=f"TW_ub{i}")
+
+    # Fix depot time
+    m.addConstr(t[depot_idx] == float(ready_time[depot_idx]), name="DepotTimeFix")
+
+    # Time propagation with Big-M
+    max_due = float(max(due_time))
+    max_service = float(max(service_time))
+    max_travel = float(max(arc_costs)) if len(arc_costs) > 0 else 0.0
+    M = max_due + max_service + max_travel
+
+    for (i, j) in arc_list:
+        if i == j:
+            continue
+        if j == depot_idx:
+            continue
+        travel_ij = float(cost_dict[(i, j)])
+        m.addConstr(
+            t[j] >= t[i] + float(service_time[i]) + travel_ij - M * (1 - x[i, j]),
+            name=f"TWprop_{i}_{j}",
+        )
+
+    return m, x, u, t
 
 
 def cvrp_via_VRP_Easy(demands, arc_index, arc_costs, nb_vehicles,
